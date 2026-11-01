@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPAL Think</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171b22; --border:#2a3140; --fg:#dde3ec; --dim:#8b94a3; --accent:#5b9dff; --ok:#4caf7d; --warn:#d9a03f; --err:#e06c5c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; align-items:baseline; gap:1rem; padding:.8rem 1.2rem; border-bottom:1px solid var(--border); }
+  header h1 { font-size:1.05rem; margin:0; }
+  #health-banner { font-size:.8rem; padding:.15rem .6rem; border-radius:1rem; border:1px solid var(--border); }
+  #health-banner.ok { color:var(--ok); } #health-banner.degraded { color:var(--warn); } #health-banner.unavailable { color:var(--err); }
+  nav { display:flex; gap:.4rem; padding:.6rem 1.2rem; border-bottom:1px solid var(--border); }
+  nav button { background:none; border:1px solid var(--border); color:var(--dim); border-radius:.4rem; padding:.3rem .8rem; cursor:pointer; }
+  nav button.active { color:var(--fg); border-color:var(--accent); }
+  main { padding:1.2rem; max-width:960px; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:.5rem; padding:1rem; margin-bottom:1rem; }
+  table { width:100%; border-collapse:collapse; font-size:.85rem; }
+  th,td { text-align:left; padding:.35rem .5rem; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color:var(--dim); font-weight:600; }
+  code { color:var(--accent); }
+  .muted { color:var(--dim); }
+  .pill { font-size:.72rem; padding:.1rem .45rem; border-radius:1rem; border:1px solid var(--border); color:var(--dim); }
+  .pill.set { color:var(--accent); border-color:var(--accent); }
+  button.small { font-size:.75rem; padding:.15rem .5rem; background:none; border:1px solid var(--border); color:var(--fg); border-radius:.3rem; cursor:pointer; }
+  button.small:hover { border-color:var(--accent); }
+  input,select { background:var(--bg); color:var(--fg); border:1px solid var(--border); border-radius:.3rem; padding:.3rem .5rem; font:inherit; }
+  #toast { position:fixed; bottom:1rem; right:1rem; padding:.6rem 1rem; border-radius:.4rem; background:var(--panel); border:1px solid var(--err); color:var(--err); display:none; max-width:26rem; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>OPAL Think</h1>
+  <span id="health-banner" class="muted">health: …</span>
+  <span class="muted" id="api-version"></span>
+</header>
+<nav>
+  <button data-view="ask" class="active">Ask</button>
+  <button data-view="tasks">Tasks</button>
+  <button data-view="sessions">Sessions</button>
+  <button data-view="models">Models</button>
+  <button data-view="settings">Settings</button>
+</nav>
+<main>
+  <section id="view-ask" class="panel"><p class="muted">Ask / chat arrive with the task engine (in progress).</p></section>
+  <section id="view-tasks" class="panel hidden"><p class="muted">Task list arrives with the task engine (in progress).</p></section>
+  <section id="view-sessions" class="panel hidden"><p class="muted">Sessions arrive in a later milestone.</p></section>
+  <section id="view-models" class="panel hidden"><p class="muted">Model discovery arrives with provider adapters.</p></section>
+  <section id="view-settings" class="panel hidden">
+    <h2>Settings</h2>
+    <p class="muted">Portable service settings. Overrides are marked <span class="pill set">set</span>; edits are guarded by a strong ETag.</p>
+    <table id="settings-table"><thead><tr><th>Key</th><th>Value</th><th>Default</th><th></th></tr></thead><tbody></tbody></table>
+    <p id="settings-pending" class="muted"></p>
+  </section>
+</main>
+<div id="toast"></div>
+<script>
+const $ = (sel) => document.querySelector(sel);
+const toast = (msg, isErr = true) => { const t = $("#toast"); t.textContent = msg; t.style.borderColor = isErr ? "var(--err)" : "var(--ok)"; t.style.color = isErr ? "var(--err)" : "var(--ok)"; t.style.display = "block"; setTimeout(() => t.style.display = "none", 4000); };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { "Accept": "application/json", "Content-Type": "application/json", ...(opts.headers || {}) }, ...opts });
+  const etag = res.headers.get("ETag");
+  let body = null;
+  try { body = await res.json(); } catch (_) { /* 204/empty */ }
+  if (!res.ok) throw Object.assign(new Error(body?.error?.message || `HTTP ${res.status}`), { status: res.status, body });
+  return { body, etag, status: res.status };
+}
+
+// ---- health banner ----
+async function refreshHealth() {
+  const banner = $("#health-banner");
+  try {
+    const { body } = await api("/api/v1/health/");
+    banner.textContent = `health: ${body.status} · models: ${body.models_available} · event: ${body.event}`;
+    banner.className = body.status;
+  } catch (e) {
+    banner.textContent = "health: unreachable";
+    banner.className = "unavailable";
+  }
+}
+
+// ---- views ----
+const loaders = { settings: loadSettings };
+document.querySelectorAll("nav button").forEach((btn) => btn.addEventListener("click", () => {
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === btn));
+  document.querySelectorAll("main section").forEach((s) => s.classList.add("hidden"));
+  $(`#view-${btn.dataset.view}`).classList.remove("hidden");
+  loaders[btn.dataset.view]?.();
+}));
+
+// ---- settings ----
+function renderSettings(data) {
+  const tbody = $("#settings-table tbody");
+  tbody.innerHTML = "";
+  for (const item of data.items) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><code>${item.key}</code></td>
+      <td>${JSON.stringify(item.value)} ${item.is_default ? '<span class="pill">default</span>' : '<span class="pill set">set</span>'}${item.pending_restart ? ' <span class="pill">restart pending</span>' : ""}</td>
+      <td class="muted">${JSON.stringify(item.default)}</td>
+      <td></td>`;
+    const actions = tr.lastElementChild;
+    const edit = document.createElement("button");
+    edit.className = "small"; edit.textContent = "Edit";
+    edit.onclick = () => editSetting(item.key);
+    const reset = document.createElement("button");
+    reset.className = "small"; reset.textContent = "Reset"; reset.style.marginLeft = ".4rem";
+    reset.onclick = () => resetSetting(item.key);
+    actions.append(edit, reset);
+    tbody.appendChild(tr);
+  }
+  $("#settings-pending").textContent = data.pending_restart_fields.length
+    ? `Restart pending for: ${data.pending_restart_fields.join(", ")}` : "";
+}
+
+async function loadSettings() {
+  try { renderSettings((await api("/api/v1/settings/")).body); }
+  catch (e) { toast(`settings: ${e.message}`); }
+}
+
+async function editSetting(key) {
+  const raw = prompt(`New JSON value for ${key} (e.g. 8, "text", true, null):`);
+  if (raw === null) return;
+  let value;
+  try { value = JSON.parse(raw); } catch (_) { value = raw; }
+  try {
+    const { etag } = await api(`/api/v1/settings/${encodeURIComponent(key)}`);
+    await api(`/api/v1/settings/${encodeURIComponent(key)}`, { method: "PUT", headers: { "If-Match": etag }, body: JSON.stringify({ value }) });
+    toast(`${key} updated`, false);
+    loadSettings();
+  } catch (e) { toast(`${key}: ${e.message}`); }
+}
+
+async function resetSetting(key) {
+  if (!confirm(`Reset ${key} to its default?`)) return;
+  try {
+    const { etag } = await api(`/api/v1/settings/${encodeURIComponent(key)}`);
+    await api(`/api/v1/settings/${encodeURIComponent(key)}`, { method: "DELETE", headers: { "If-Match": etag } });
+    toast(`${key} reset`, false);
+    loadSettings();
+  } catch (e) { toast(`${key}: ${e.message}`); }
+}
+
+refreshHealth();
+</script>
+</body>
+</html>

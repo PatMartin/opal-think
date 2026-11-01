@@ -7,11 +7,12 @@ correlation headers are applied to all responses by :class:`OpalContextMiddlewar
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from opal_think import API_VERSION
 from opal_think.auth import require_auth
@@ -19,7 +20,8 @@ from opal_think.config import ThinkConfig
 from opal_think.deps import RuntimeState
 from opal_think.errors import OpalHTTPException
 from opal_think.opal_context import OpalContextMiddleware, get_opal_context
-from opal_think.routers import health
+from opal_think.routers import health, settings
+from opal_think.settings_registry import SettingsRegistry, SettingsStore
 
 logger = logging.getLogger("opal_think.app")
 
@@ -47,7 +49,11 @@ async def _opal_http_exception_handler(request: Request, exc: OpalHTTPException)
 
 
 async def _request_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    return _opal_error(request, 422, "validation_error", "request validation failed", exc.errors())
+    """422 for schema violations; 400 when the body isn't parseable JSON at all."""
+    errors = exc.errors()
+    if errors and all(e.get("type") == "json_invalid" for e in errors):
+        return _opal_error(request, 400, "bad_request", "malformed JSON request body", errors)
+    return _opal_error(request, 422, "validation_error", "request validation failed", errors)
 
 
 _HTTP_CODES = {
@@ -89,6 +95,7 @@ def create_app(config: ThinkConfig | None = None) -> FastAPI:
     app = FastAPI(title="OPAL Think API", version=API_VERSION)
     app.state.config = config
     app.state.runtime = RuntimeState()
+    app.state.settings = SettingsRegistry(SettingsStore(config.db_path))
 
     app.add_middleware(OpalContextMiddleware)
     app.add_exception_handler(OpalHTTPException, _opal_http_exception_handler)  # type: ignore[arg-type]
@@ -97,6 +104,14 @@ def create_app(config: ThinkConfig | None = None) -> FastAPI:
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
     app.include_router(health.router, dependencies=[Depends(require_auth)])
+    app.include_router(settings.router, dependencies=[Depends(require_auth)])
+
+    spa_index = Path(__file__).resolve().parent / "spa" / "index.html"
+    if spa_index.is_file():
+
+        @app.get("/", include_in_schema=False)
+        async def spa() -> FileResponse:
+            return FileResponse(spa_index)
 
     async def _not_found() -> None:
         raise OpalHTTPException(404, "not_found", "resource does not exist")

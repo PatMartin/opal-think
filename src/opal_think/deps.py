@@ -8,6 +8,7 @@ from fastapi import Request
 
 from opal_think.config import ThinkConfig
 from opal_think.opal_context import OpalContext, get_opal_context
+from opal_think.settings_registry import SettingsRegistry
 
 
 @dataclass
@@ -33,3 +34,7 @@ def get_runtime(request: Request) -> RuntimeState:
 
 def get_context(request: Request) -> OpalContext:
     return get_opal_context(request)
+
+
+def get_settings(request: Request) -> SettingsRegistry:
+    return request.app.state.settings

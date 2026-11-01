@@ -23,6 +23,8 @@ class CliState:
 think_app = typer.Typer(
     help="OPAL Think: guarded reasoning service.", no_args_is_help=True, pretty_exceptions_enable=False
 )
+settings_app = typer.Typer(help="Portable service settings (strong-ETag guarded).", no_args_is_help=True)
+think_app.add_typer(settings_app, name="settings")
 
 
 @think_app.callback()
@@ -99,6 +101,67 @@ def health(
     """Service health: overall status, or --live / --ready probes."""
     path = "/api/v1/health/live" if live else "/api/v1/health/ready" if ready else "/api/v1/health/"
     _emit(ctx, _call(ctx, "GET", path).json())
+
+
+# -- settings ----------------------------------------------------------------------------------
+
+
+def _parse_value(raw: str) -> Any:
+    """CLI values are native JSON; a bare word falls back to a plain string."""
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+def _setting_etag(ctx: typer.Context, key: str) -> str:
+    return _call(ctx, "GET", f"/api/v1/settings/{key}").headers["ETag"]
+
+
+@settings_app.command("list")
+def settings_list(ctx: typer.Context) -> None:
+    """List registered settings (portable values; secrets shown as references)."""
+    data = _call(ctx, "GET", "/api/v1/settings/").json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+        return
+    for item in data["items"]:
+        suffix = "  (default)" if item["is_default"] else "  *"
+        suffix += "  [restart pending]" if item["pending_restart"] else ""
+        typer.echo(f"{item['key']} = {json.dumps(item['value'])}{suffix}")
+    if data["pending_restart_fields"]:
+        typer.echo(f"pending_restart_fields: {', '.join(data['pending_restart_fields'])}", err=True)
+
+
+@settings_app.command("show")
+def settings_show(ctx: typer.Context, key: str) -> None:
+    """Show one registered setting."""
+    _emit(ctx, _call(ctx, "GET", f"/api/v1/settings/{key}").json())
+
+
+@settings_app.command("set")
+def settings_set(
+    ctx: typer.Context,
+    key: str,
+    value: str,
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Set one setting to a native JSON value (auto-fetches the strong ETag)."""
+    etag = if_match or _setting_etag(ctx, key)
+    response = _call(ctx, "PUT", f"/api/v1/settings/{key}", json={"value": _parse_value(value)}, headers={"If-Match": etag})
+    _emit(ctx, response.json())
+
+
+@settings_app.command("remove")
+def settings_remove(
+    ctx: typer.Context,
+    key: str,
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Reset a setting to its registered default (removes the override)."""
+    etag = if_match or _setting_etag(ctx, key)
+    _call(ctx, "DELETE", f"/api/v1/settings/{key}", headers={"If-Match": etag})
+    typer.echo(f"{key}: reset to default")
 
 
 # -- `opal` root -------------------------------------------------------------------------------

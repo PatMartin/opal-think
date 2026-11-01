@@ -197,7 +197,7 @@ class Setting(BaseModel):
 class SettingUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    value: Any = None
+    value: Any  # required; may still be JSON null
 
 
 class SettingsSnapshot(BaseModel):

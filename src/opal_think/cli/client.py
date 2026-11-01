@@ -1,6 +1,7 @@
 """Thin HTTPX client for the OPAL-THINK REST API.
 
 All commands go through this client over HTTP; no server internals are imported.
+``http`` accepts a pre-built ``httpx.Client`` (e.g. a MockTransport) for tests.
 """
 
 from __future__ import annotations
@@ -31,15 +32,24 @@ class ApiCallError(Exception):
 
 
 class ApiClient:
-    def __init__(self, base_url: str, token: str | None = None, timeout: float = 30.0) -> None:
-        headers = {"Accept": "application/json"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        self._client = httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=timeout)
+    def __init__(
+        self,
+        base_url: str,
+        token: str | None = None,
+        timeout: float = 30.0,
+        http: httpx.Client | None = None,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._token = token
+        self._client = http or httpx.Client(base_url=self._base_url, timeout=timeout)
 
     def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        headers = dict(kwargs.pop("headers", {}))
+        headers.setdefault("Accept", "application/json")
+        if self._token:
+            headers.setdefault("Authorization", f"Bearer {self._token}")
         try:
-            response = self._client.request(method, path, **kwargs)
+            response = self._client.request(method, path, headers=headers, **kwargs)
         except httpx.HTTPError as exc:
             raise ApiCallError(0, f"cannot reach OPAL-THINK API: {exc}") from exc
         if response.status_code >= 400:
@@ -57,3 +67,15 @@ class ApiClient:
 
     def get(self, path: str, **kwargs: Any) -> httpx.Response:
         return self.request("GET", path, **kwargs)
+
+    def post(self, path: str, **kwargs: Any) -> httpx.Response:
+        return self.request("POST", path, **kwargs)
+
+    def put(self, path: str, **kwargs: Any) -> httpx.Response:
+        return self.request("PUT", path, **kwargs)
+
+    def patch(self, path: str, **kwargs: Any) -> httpx.Response:
+        return self.request("PATCH", path, **kwargs)
+
+    def delete(self, path: str, **kwargs: Any) -> httpx.Response:
+        return self.request("DELETE", path, **kwargs)
