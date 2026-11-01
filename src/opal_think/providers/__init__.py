@@ -1,0 +1,94 @@
+"""Model provider adapters: normalized discovery + inference boundary.
+
+A *provider* is a configured settings entry (``providers.<id>.type|base_url|enabled|
+credential_ref``). Adapters translate vendor APIs into the contract's portable model:
+``Model`` discovery rows and ``Generation`` results. THINK never calls vendor SDKs from
+business logic — only through this boundary. Ollama is the primary local provider;
+OpenAI is supported; ``fake`` is a deterministic adapter for tests and local demos.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+
+class ProviderUnavailable(Exception):
+    """The provider endpoint is unreachable, unauthorized, or returned an error."""
+
+
+class CapabilityUnsupported(Exception):
+    """The adapter/model does not support a requested feature (e.g. tool calling)."""
+
+
+@dataclass
+class DiscoveredModel:
+    """Provider-reported model facts; the router maps these to contract ``Model`` rows."""
+
+    name: str
+    available: bool
+    streaming: bool = True
+    tool_calling: bool = False
+    structured_output: bool = False
+    vision: bool = False
+    context_window: int | None = None
+    description: str | None = None
+
+
+@dataclass
+class ToolCallRequest:
+    """A normalized model-proposed tool invocation (validated against EVENT actions later)."""
+
+    action_id: str
+    event: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Generation:
+    """Normalized inference result; provider usage/finish metadata when available."""
+
+    text: str
+    tool_calls: list[ToolCallRequest] = field(default_factory=list)
+    finish_reason: str | None = None
+    usage: dict[str, Any] = field(default_factory=dict)
+
+
+class ProviderAdapter(Protocol):
+    """Uniform boundary every inference provider implements."""
+
+    provider_id: str
+    type: str
+
+    async def list_models(self) -> list[DiscoveredModel]:
+        """Discover models; raises :class:`ProviderUnavailable` on failure."""
+        ...
+
+    async def show_model(self, name: str) -> DiscoveredModel | None:
+        """One model's capabilities; None when unknown to the provider."""
+        ...
+
+    async def generate(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        stream: bool = False,
+    ) -> Generation:
+        """Non-streaming normalized generation. ``tools`` are vendor-native tool specs.
+
+        Raises :class:`ProviderUnavailable` on transport/API failure and
+        :class:`CapabilityUnsupported` when a required capability is missing."""
+        ...
+
+    def stream_generate(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+    ) -> AsyncIterator[str]:
+        """Incremental user-facing text deltas (task.output events); no tool calls.
+
+        Used only for models that report ``capabilities.streaming``; callers must treat
+        stream interruptions as recoverable only via the final Task snapshot."""
+        ...

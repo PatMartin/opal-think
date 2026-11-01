@@ -53,7 +53,11 @@
     <table id="sessions-table"><thead><tr><th>ID</th><th>Title</th><th>Tasks</th><th>Updated</th><th></th></tr></thead><tbody></tbody></table>
     <p id="sessions-more" class="muted"></p>
   </section>
-  <section id="view-models" class="panel hidden"><p class="muted">Model discovery arrives with provider adapters.</p></section>
+  <section id="view-models" class="panel hidden">
+    <h2>Models</h2>
+    <p class="muted">Discovered from configured providers. Use the opaque ID in task <code>model_id</code>.</p>
+    <table id="models-table"><thead><tr><th>ID</th><th>Provider</th><th>Available</th><th>Ctx</th><th>Capabilities</th><th>Description</th></tr></thead><tbody></tbody></table>
+  </section>
   <section id="view-settings" class="panel hidden">
     <h2>Settings</h2>
     <p class="muted">Portable service settings. Overrides are marked <span class="pill set">set</span>; edits are guarded by a strong ETag.</p>
@@ -89,7 +93,7 @@ async function refreshHealth() {
 }
 
 // ---- views ----
-const loaders = { settings: loadSettings, sessions: loadSessions };
+const loaders = { settings: loadSettings, sessions: loadSessions, models: loadModels };
 document.querySelectorAll("nav button").forEach((btn) => btn.addEventListener("click", () => {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === btn));
   document.querySelectorAll("main section").forEach((s) => s.classList.add("hidden"));
@@ -185,6 +189,27 @@ async function removeSession(id) {
   catch (e) {
     if (e.status === 409) toast(`${id}: cancel active tasks before removing`);
     else toast(`${id}: ${e.message}`);
+  }
+}
+
+// ---- models ----
+async function loadModels() {
+  const tbody = $("#models-table tbody");
+  tbody.innerHTML = '<tr><td colspan="6" class="muted">Loading…</td></tr>';
+  try {
+    const { body } = await api("/api/v1/models/");
+    tbody.innerHTML = "";
+    for (const m of body) {
+      const caps = Object.entries(m.capabilities).filter(([, v]) => v).map(([k]) => k).join(", ");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td><code>${m.id}</code></td><td>${m.provider}</td>
+        <td>${m.available ? '<span class="pill set">yes</span>' : '<span class="pill">no</span>'}</td>
+        <td>${m.context_window ?? "—"}</td><td class="muted">${caps}</td><td class="muted">${m.description ?? "—"}</td>`;
+      tbody.appendChild(tr);
+    }
+    if (!body.length) tbody.innerHTML = '<tr><td colspan="6" class="muted">No models discovered — all configured providers unreachable or disabled.</td></tr>';
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="6" class="muted">Model catalog unavailable: ${e.message}</td></tr>`;
   }
 }
 

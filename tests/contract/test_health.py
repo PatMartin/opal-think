@@ -37,7 +37,7 @@ def test_readiness_unavailable_without_models(client: TestClient) -> None:
 
 def test_readiness_ok_with_model(tmp_path) -> None:
     app = create_app(ThinkConfig(db_path=tmp_path / "t.db"))
-    app.state.runtime.models_available = 1
+    app.state.settings.store.set_many({"providers.fake.type": "fake", "providers.fake.enabled": True})
     with TestClient(app) as client:
         response = client.get("/api/v1/health/ready")
     assert response.status_code == 200
@@ -60,12 +60,18 @@ def test_health_summary_shape(client: TestClient) -> None:
 
 def test_health_degraded_when_event_fails(tmp_path) -> None:
     app = create_app(ThinkConfig(db_path=tmp_path / "t.db"))
-    app.state.runtime.models_available = 2
-    app.state.runtime.event_status = "unavailable"
+    app.state.settings.store.set_many(
+        {
+            "providers.fake.type": "fake",
+            "providers.fake.enabled": True,
+            "event.base_url": "http://127.0.0.1:1",  # nothing listening -> EVENT unavailable
+        }
+    )
     with TestClient(app) as client:
         body = client.get("/api/v1/health/").json()
     assert body["status"] == "degraded"
     assert body["ready"] is True
+    assert body["event"] == "unavailable"
 
 
 def test_opal_headers_echoed_on_success(client: TestClient) -> None:

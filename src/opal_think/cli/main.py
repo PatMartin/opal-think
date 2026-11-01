@@ -25,8 +25,10 @@ think_app = typer.Typer(
 )
 settings_app = typer.Typer(help="Portable service settings (strong-ETag guarded).", no_args_is_help=True)
 sessions_app = typer.Typer(help="Optional conversation context containers.", no_args_is_help=True)
+models_app = typer.Typer(help="Discovered model catalog (read-only).", no_args_is_help=True)
 think_app.add_typer(settings_app, name="settings")
 think_app.add_typer(sessions_app, name="session")
+think_app.add_typer(models_app, name="model")
 
 
 @think_app.callback()
@@ -216,6 +218,32 @@ def session_remove(ctx: typer.Context, session_id: str) -> None:
     """Remove a session and its retained task records (409 while tasks are active)."""
     _call(ctx, "DELETE", f"/api/v1/sessions/{session_id}")
     typer.echo(f"{session_id}: removed")
+
+
+# -- model -------------------------------------------------------------------------------------
+
+
+@models_app.command("list")
+def model_list(ctx: typer.Context) -> None:
+    """List discovered models across configured providers."""
+    data = _call(ctx, "GET", "/api/v1/models/").json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+        return
+    if not data:
+        typer.echo("no models discovered (all configured providers unreachable or none enabled)", err=True)
+        return
+    for m in data:
+        caps = ",".join(k for k, v in m["capabilities"].items() if v)
+        ctx_size = m["context_window"] or "-"
+        avail = "yes" if m["available"] else "no"
+        typer.echo(f"{m['id']}  provider={m['provider']}  available={avail}  ctx={ctx_size}  caps={caps}")
+
+
+@models_app.command("show")
+def model_show(ctx: typer.Context, model_id: str) -> None:
+    """Show one model's capabilities (opaque ID, e.g. ollama:llama3.2)."""
+    _emit(ctx, _call(ctx, "GET", f"/api/v1/models/{model_id}").json())
 
 
 # -- `opal` root -------------------------------------------------------------------------------
