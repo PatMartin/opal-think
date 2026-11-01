@@ -45,3 +45,7 @@ def get_store(request: Request) -> ThinkStore:
 
 def get_providers(request: Request) -> ProviderRegistry:
     return request.app.state.providers
+
+
+def get_engine(request: Request):
+    return request.app.state.engine

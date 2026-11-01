@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,9 +27,13 @@ think_app = typer.Typer(
 settings_app = typer.Typer(help="Portable service settings (strong-ETag guarded).", no_args_is_help=True)
 sessions_app = typer.Typer(help="Optional conversation context containers.", no_args_is_help=True)
 models_app = typer.Typer(help="Discovered model catalog (read-only).", no_args_is_help=True)
+tasks_app = typer.Typer(help="Reasoning tasks: create, list, show, watch, cancel.", no_args_is_help=True)
 think_app.add_typer(settings_app, name="settings")
 think_app.add_typer(sessions_app, name="session")
 think_app.add_typer(models_app, name="model")
+think_app.add_typer(tasks_app, name="task")
+
+_TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
 
 
 @think_app.callback()
@@ -244,6 +249,95 @@ def model_list(ctx: typer.Context) -> None:
 def model_show(ctx: typer.Context, model_id: str) -> None:
     """Show one model's capabilities (opaque ID, e.g. ollama:llama3.2)."""
     _emit(ctx, _call(ctx, "GET", f"/api/v1/models/{model_id}").json())
+
+
+# -- task --------------------------------------------------------------------------------------
+
+
+def _print_task(data: dict) -> None:
+    typer.echo(f"task {data['id']}  status={data['status']}  model={data['model_id']}  steps={data['steps_completed']}")
+    if data.get("answer"):
+        typer.echo(data["answer"])
+    if data.get("error"):
+        typer.echo(f"error: {data['error']['code']}: {data['error']['message']}", err=True)
+
+
+def _await_task(ctx: typer.Context, task_id: str, timeout: float = 300.0) -> dict:
+    """Poll show_task until the task reaches a terminal state (watch lands with SSE)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        data = _call(ctx, "GET", f"/api/v1/tasks/{task_id}").json()
+        if data["status"] in _TERMINAL or time.monotonic() > deadline:
+            return data
+        time.sleep(0.5)
+
+
+@tasks_app.command("create")
+def task_create(
+    ctx: typer.Context,
+    prompt: str,
+    model: str = typer.Option(None, "--model", help="Model id (e.g. ollama:llama3.2)"),
+    session_id: str = typer.Option(None, "--session-id", help="Existing session to serialize into"),
+    max_steps: int = typer.Option(None, "--max-steps", min=1, max=100),
+    timeout: int = typer.Option(None, "--timeout", help="Task deadline seconds", min=1, max=3600),
+    detach: bool = typer.Option(False, "--detach", help="Return the task id without awaiting"),
+) -> None:
+    """Submit one unit of work; prints the task id or waits for completion."""
+    body: dict[str, Any] = {"prompt": prompt}
+    if model:
+        body["model_id"] = model
+    if session_id:
+        body["session_id"] = session_id
+    if max_steps:
+        body["max_steps"] = max_steps
+    if timeout:
+        body["timeout_seconds"] = timeout
+    data = _call(ctx, "POST", "/api/v1/tasks/", json=body).json()
+    if detach:
+        if _state(ctx).json_output:
+            _emit(ctx, data)
+        else:
+            typer.echo(data["id"])
+        return
+    data = _await_task(ctx, data["id"], timeout=float(timeout or 300))
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+    else:
+        _print_task(data)
+    if data["status"] not in {"completed"}:
+        raise typer.Exit(2)
+
+
+@tasks_app.command("list")
+def task_list(
+    ctx: typer.Context,
+    status: str = typer.Option(None, "--status", help="queued|running|completed|failed|cancelled|timed_out"),
+    session_id: str = typer.Option(None, "--session-id"),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+    cursor: str = typer.Option(None, "--cursor"),
+) -> None:
+    """List retained tasks, newest first."""
+    params: dict[str, Any] = {"limit": limit}
+    if status:
+        params["status"] = status
+    if session_id:
+        params["session_id"] = session_id
+    if cursor:
+        params["cursor"] = cursor
+    data = _call(ctx, "GET", "/api/v1/tasks/", params=params).json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+        return
+    for t in data["items"]:
+        typer.echo(f"{t['id']}  {t['status']:<10}  {t['model_id']}  {t['prompt'][:60]}")
+    if data["next_cursor"]:
+        typer.echo(f"next_cursor: {data['next_cursor']}", err=True)
+
+
+@tasks_app.command("show")
+def task_show(ctx: typer.Context, task_id: str) -> None:
+    """Authoritative snapshot: status, answer, bounded steps."""
+    _emit(ctx, _call(ctx, "GET", f"/api/v1/tasks/{task_id}").json())
 
 
 # -- `opal` root -------------------------------------------------------------------------------

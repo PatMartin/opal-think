@@ -45,8 +45,24 @@
   <button data-view="settings">Settings</button>
 </nav>
 <main>
-  <section id="view-ask" class="panel"><p class="muted">Ask / chat arrive with the task engine (in progress).</p></section>
-  <section id="view-tasks" class="panel hidden"><p class="muted">Task list arrives with the task engine (in progress).</p></section>
+  <section id="view-ask" class="panel">
+    <h2>Ask</h2>
+    <p><textarea id="ask-prompt" rows="4" style="width:100%" placeholder="Ask OPAL-THINK…"></textarea></p>
+    <p>
+      <select id="ask-model"><option value="">default model</option></select>
+      <select id="ask-session"><option value="">no session</option></select>
+      <button class="small" id="ask-submit">Submit task</button>
+    </p>
+    <div id="ask-result" class="panel hidden"></div>
+  </section>
+  <section id="view-tasks" class="panel hidden">
+    <h2>Tasks
+      <select id="task-filter"><option value="">all</option><option>queued</option><option>running</option>
+        <option>completed</option><option>failed</option><option>cancelled</option><option>timed_out</option></select>
+      <button class="small" id="task-refresh">Refresh</button></h2>
+    <table id="tasks-table"><thead><tr><th>ID</th><th>Status</th><th>Model</th><th>Prompt</th><th>Finished</th></tr></thead><tbody></tbody></table>
+    <div id="task-detail" class="panel hidden"></div>
+  </section>
   <section id="view-sessions" class="panel hidden">
     <h2>Sessions <button class="small" id="session-new">New session</button></h2>
     <p class="muted">Optional durable conversation context. Removing a session also removes its retained task history.</p>
@@ -93,7 +109,7 @@ async function refreshHealth() {
 }
 
 // ---- views ----
-const loaders = { settings: loadSettings, sessions: loadSessions, models: loadModels };
+const loaders = { settings: loadSettings, sessions: loadSessions, models: loadModels, tasks: loadTasks, ask: loadAsk };
 document.querySelectorAll("nav button").forEach((btn) => btn.addEventListener("click", () => {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === btn));
   document.querySelectorAll("main section").forEach((s) => s.classList.add("hidden"));
@@ -212,6 +228,79 @@ async function loadModels() {
     tbody.innerHTML = `<tr><td colspan="6" class="muted">Model catalog unavailable: ${e.message}</td></tr>`;
   }
 }
+
+// ---- ask + tasks ----
+const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out"]);
+
+async function loadAsk() {
+  const modelSel = $("#ask-model"), sessSel = $("#ask-session");
+  if (modelSel.options.length > 1) return;
+  try {
+    const { body: models } = await api("/api/v1/models/");
+    for (const m of models.filter((m) => m.available)) modelSel.add(new Option(m.id, m.id));
+  } catch (_) { /* providers may be down */ }
+  try {
+    const { body: sessions } = await api("/api/v1/sessions/");
+    for (const s of sessions.items) sessSel.add(new Option(s.title || s.id, s.id));
+  } catch (_) { /* ignore */ }
+}
+
+$("#ask-submit").addEventListener("click", async () => {
+  const prompt = $("#ask-prompt").value.trim();
+  if (!prompt) return toast("prompt is required");
+  const body = { prompt };
+  if ($("#ask-model").value) body.model_id = $("#ask-model").value;
+  if ($("#ask-session").value) body.session_id = $("#ask-session").value;
+  try {
+    const { body: task } = await api("/api/v1/tasks/", { method: "POST", body: JSON.stringify(body) });
+    $("#ask-result").classList.remove("hidden");
+    renderTask($("#ask-result"), task);
+    pollTask(task.id, $("#ask-result"));
+  } catch (e) { toast(`task: ${e.message}`); }
+});
+
+async function pollTask(id, el) {
+  try {
+    const { body: task } = await api(`/api/v1/tasks/${encodeURIComponent(id)}`);
+    renderTask(el, task);
+    if (!TERMINAL.has(task.status)) setTimeout(() => pollTask(id, el), 800);
+  } catch (e) { el.innerHTML += `<p class="muted">poll error: ${e.message}</p>`; }
+}
+
+function renderTask(el, t) {
+  const steps = (t.steps || []).map((s) => `<li><span class="pill">${s.kind}</span> ${s.summary} <span class="muted">(${s.status})</span></li>`).join("");
+  el.innerHTML = `<p><code>${t.id}</code> <span class="pill ${t.status === "completed" ? "set" : ""}">${t.status}</span>
+    <span class="muted">model ${t.model_id} · ${t.steps_completed} steps</span></p>
+    ${t.answer ? `<p>${t.answer}</p>` : ""}
+    ${t.error ? `<p style="color:var(--err)">${t.error.code}: ${t.error.message}</p>` : ""}
+    ${steps ? `<ul>${steps}</ul>` : ""}`;
+}
+
+async function loadTasks() {
+  const status = $("#task-filter").value;
+  const tbody = $("#tasks-table tbody");
+  try {
+    const { body } = await api(`/api/v1/tasks/${status ? `?status=${status}` : ""}`);
+    tbody.innerHTML = "";
+    for (const t of body.items) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td><code>${t.id}</code></td><td>${t.status}</td><td class="muted">${t.model_id}</td>
+        <td>${t.prompt.slice(0, 70)}</td><td class="muted">${t.finished_at ?? "—"}</td>`;
+      tr.style.cursor = "pointer";
+      tr.onclick = async () => {
+        const detail = $("#task-detail");
+        detail.classList.remove("hidden");
+        const { body: full } = await api(`/api/v1/tasks/${encodeURIComponent(t.id)}`);
+        renderTask(detail, full);
+      };
+      tbody.appendChild(tr);
+    }
+    if (!body.items.length) tbody.innerHTML = '<tr><td colspan="5" class="muted">No tasks.</td></tr>';
+  } catch (e) { tbody.innerHTML = `<tr><td colspan="5" class="muted">${e.message}</td></tr>`; }
+}
+
+$("#task-refresh").addEventListener("click", loadTasks);
+$("#task-filter").addEventListener("change", loadTasks);
 
 refreshHealth();
 </script>

@@ -10,10 +10,11 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from opal_think import API_VERSION, __version__
-from opal_think.deps import RuntimeState, get_providers, get_runtime, get_settings
+from opal_think.deps import get_providers, get_settings, get_store
 from opal_think.providers.registry import ProviderRegistry
 from opal_think.schemas import Health, HealthProbe
 from opal_think.settings_registry import SettingsRegistry
+from opal_think.store import ThinkStore
 
 router = APIRouter(prefix="/api/v1/health", tags=["health"])
 
@@ -28,9 +29,9 @@ def _service_status(models_available: int, event_status: str) -> str:
 
 @router.get("/", operation_id="get_health", summary="Service health")
 async def get_health(
-    runtime: RuntimeState = Depends(get_runtime),
     providers: ProviderRegistry = Depends(get_providers),
     settings: SettingsRegistry = Depends(get_settings),
+    store: ThinkStore = Depends(get_store),
 ) -> Health:
     models_available = await providers.available_model_count()
     event_status = await providers.event_status()
@@ -40,7 +41,7 @@ async def get_health(
         ready=models_available > 0,
         models_available=models_available,
         event=event_status,  # type: ignore[arg-type]
-        active_tasks=runtime.active_tasks,
+        active_tasks=store.count_active_now(),
         pending_restart_fields=pending_restart,
     )
 
