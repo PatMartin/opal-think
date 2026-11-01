@@ -9,6 +9,7 @@ from fastapi import Request
 from opal_think.config import ThinkConfig
 from opal_think.opal_context import OpalContext, get_opal_context
 from opal_think.settings_registry import SettingsRegistry
+from opal_think.store import ThinkStore
 
 
 @dataclass
@@ -38,3 +39,7 @@ def get_context(request: Request) -> OpalContext:
 
 def get_settings(request: Request) -> SettingsRegistry:
     return request.app.state.settings
+
+
+def get_store(request: Request) -> ThinkStore:
+    return request.app.state.store

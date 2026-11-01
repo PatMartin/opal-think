@@ -24,7 +24,9 @@ think_app = typer.Typer(
     help="OPAL Think: guarded reasoning service.", no_args_is_help=True, pretty_exceptions_enable=False
 )
 settings_app = typer.Typer(help="Portable service settings (strong-ETag guarded).", no_args_is_help=True)
+sessions_app = typer.Typer(help="Optional conversation context containers.", no_args_is_help=True)
 think_app.add_typer(settings_app, name="settings")
+think_app.add_typer(sessions_app, name="session")
 
 
 @think_app.callback()
@@ -162,6 +164,58 @@ def settings_remove(
     etag = if_match or _setting_etag(ctx, key)
     _call(ctx, "DELETE", f"/api/v1/settings/{key}", headers={"If-Match": etag})
     typer.echo(f"{key}: reset to default")
+
+
+# -- session -----------------------------------------------------------------------------------
+
+
+@sessions_app.command("add")
+def session_add(
+    ctx: typer.Context,
+    title: str = typer.Option(None, "--title", help="Optional human-readable label"),
+) -> None:
+    """Create a session (a durable conversation context container)."""
+    response = _call(ctx, "POST", "/api/v1/sessions/", json={"title": title})
+    data = response.json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+    else:
+        typer.echo(f"session_id: {data['id']}")
+        if data["title"]:
+            typer.echo(f"title: {data['title']}")
+
+
+@sessions_app.command("list")
+def session_list(
+    ctx: typer.Context,
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+    cursor: str = typer.Option(None, "--cursor", help="Continuation token from a previous list"),
+) -> None:
+    """List sessions, newest updated first."""
+    params: dict[str, Any] = {"limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    data = _call(ctx, "GET", "/api/v1/sessions/", params=params).json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+        return
+    for item in data["items"]:
+        typer.echo(f"{item['id']}  {item['title'] or '-'}  tasks={item['task_count']}  updated={item['updated_at']}")
+    if data["next_cursor"]:
+        typer.echo(f"next_cursor: {data['next_cursor']}", err=True)
+
+
+@sessions_app.command("show")
+def session_show(ctx: typer.Context, session_id: str) -> None:
+    """Show one session's metadata."""
+    _emit(ctx, _call(ctx, "GET", f"/api/v1/sessions/{session_id}").json())
+
+
+@sessions_app.command("remove")
+def session_remove(ctx: typer.Context, session_id: str) -> None:
+    """Remove a session and its retained task records (409 while tasks are active)."""
+    _call(ctx, "DELETE", f"/api/v1/sessions/{session_id}")
+    typer.echo(f"{session_id}: removed")
 
 
 # -- `opal` root -------------------------------------------------------------------------------

@@ -20,8 +20,9 @@ from opal_think.config import ThinkConfig
 from opal_think.deps import RuntimeState
 from opal_think.errors import OpalHTTPException
 from opal_think.opal_context import OpalContextMiddleware, get_opal_context
-from opal_think.routers import health, settings
+from opal_think.routers import health, sessions, settings
 from opal_think.settings_registry import SettingsRegistry, SettingsStore
+from opal_think.store import ThinkStore
 
 logger = logging.getLogger("opal_think.app")
 
@@ -96,6 +97,7 @@ def create_app(config: ThinkConfig | None = None) -> FastAPI:
     app.state.config = config
     app.state.runtime = RuntimeState()
     app.state.settings = SettingsRegistry(SettingsStore(config.db_path))
+    app.state.store = ThinkStore(config.db_path)
 
     app.add_middleware(OpalContextMiddleware)
     app.add_exception_handler(OpalHTTPException, _opal_http_exception_handler)  # type: ignore[arg-type]
@@ -105,6 +107,7 @@ def create_app(config: ThinkConfig | None = None) -> FastAPI:
 
     app.include_router(health.router, dependencies=[Depends(require_auth)])
     app.include_router(settings.router, dependencies=[Depends(require_auth)])
+    app.include_router(sessions.router, dependencies=[Depends(require_auth)])
 
     spa_index = Path(__file__).resolve().parent / "spa" / "index.html"
     if spa_index.is_file():

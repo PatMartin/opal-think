@@ -47,7 +47,12 @@
 <main>
   <section id="view-ask" class="panel"><p class="muted">Ask / chat arrive with the task engine (in progress).</p></section>
   <section id="view-tasks" class="panel hidden"><p class="muted">Task list arrives with the task engine (in progress).</p></section>
-  <section id="view-sessions" class="panel hidden"><p class="muted">Sessions arrive in a later milestone.</p></section>
+  <section id="view-sessions" class="panel hidden">
+    <h2>Sessions <button class="small" id="session-new">New session</button></h2>
+    <p class="muted">Optional durable conversation context. Removing a session also removes its retained task history.</p>
+    <table id="sessions-table"><thead><tr><th>ID</th><th>Title</th><th>Tasks</th><th>Updated</th><th></th></tr></thead><tbody></tbody></table>
+    <p id="sessions-more" class="muted"></p>
+  </section>
   <section id="view-models" class="panel hidden"><p class="muted">Model discovery arrives with provider adapters.</p></section>
   <section id="view-settings" class="panel hidden">
     <h2>Settings</h2>
@@ -84,7 +89,7 @@ async function refreshHealth() {
 }
 
 // ---- views ----
-const loaders = { settings: loadSettings };
+const loaders = { settings: loadSettings, sessions: loadSessions };
 document.querySelectorAll("nav button").forEach((btn) => btn.addEventListener("click", () => {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === btn));
   document.querySelectorAll("main section").forEach((s) => s.classList.add("hidden"));
@@ -142,6 +147,45 @@ async function resetSetting(key) {
     toast(`${key} reset`, false);
     loadSettings();
   } catch (e) { toast(`${key}: ${e.message}`); }
+}
+
+// ---- sessions ----
+async function loadSessions() {
+  try {
+    const { body } = await api("/api/v1/sessions/");
+    const tbody = $("#sessions-table tbody");
+    tbody.innerHTML = "";
+    for (const s of body.items) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td><code>${s.id}</code></td><td>${s.title ?? '<span class="muted">—</span>'}</td>
+        <td>${s.task_count}</td><td class="muted">${s.updated_at}</td><td></td>`;
+      const del = document.createElement("button");
+      del.className = "small"; del.textContent = "Remove";
+      del.onclick = () => removeSession(s.id);
+      tr.lastElementChild.appendChild(del);
+      tbody.appendChild(tr);
+    }
+    if (!body.items.length) tbody.innerHTML = '<tr><td colspan="5" class="muted">No sessions.</td></tr>';
+    $("#sessions-more").textContent = body.has_more ? "More sessions exist (pagination via CLI/REST)." : "";
+  } catch (e) { toast(`sessions: ${e.message}`); }
+}
+
+$("#session-new").addEventListener("click", async () => {
+  const title = prompt("Session title (optional):") ?? null;
+  try {
+    const { body } = await api("/api/v1/sessions/", { method: "POST", body: JSON.stringify(title ? { title } : {}) });
+    toast(`created ${body.id}`, false);
+    loadSessions();
+  } catch (e) { toast(`sessions: ${e.message}`); }
+});
+
+async function removeSession(id) {
+  if (!confirm(`Remove ${id} and its retained task records?`)) return;
+  try { await api(`/api/v1/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); toast(`${id} removed`, false); loadSessions(); }
+  catch (e) {
+    if (e.status === 409) toast(`${id}: cancel active tasks before removing`);
+    else toast(`${id}: ${e.message}`);
+  }
 }
 
 refreshHealth();
