@@ -15,7 +15,7 @@ import httpx
 
 from opal_think.providers import DiscoveredModel, Generation, ProviderUnavailable, ToolCallRequest
 
-_DISCOVERY_TIMEOUT = 3.0
+_DISCOVERY_TIMEOUT = 5.0
 _GENERATE_TIMEOUT = 600.0
 
 

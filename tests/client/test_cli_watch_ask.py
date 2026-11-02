@@ -78,3 +78,20 @@ def test_task_cancel_terminal_conflict(api) -> None:
     result = runner.invoke(cli_main.think_app, ["task", "cancel", task_id])
     assert result.exit_code == 1
     assert "terminal" in result.output
+
+
+def test_chat_creates_session_and_turns(api) -> None:
+    result = runner.invoke(cli_main.think_app, ["chat"], input="ping\nexit\n")
+    assert result.exit_code == 0, result.output
+    assert "(session sess_" in result.output
+    assert "echo: ping" in result.output
+    sessions = api.get("/api/v1/sessions/").json()["items"]
+    assert sessions and sessions[0]["task_count"] == 1
+
+
+def test_chat_resumes_session(api) -> None:
+    sid = api.post("/api/v1/sessions/", json={}).json()["id"]
+    result = runner.invoke(cli_main.think_app, ["chat", "--session-id", sid], input="a\nb\nexit\n")
+    assert result.exit_code == 0, result.output
+    assert "echo: a" in result.output and "echo: b" in result.output
+    assert api.get(f"/api/v1/sessions/{sid}").json()["task_count"] == 2

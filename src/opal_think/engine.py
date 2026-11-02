@@ -23,6 +23,7 @@ from opal_think.providers.registry import ProviderRegistry
 from opal_think.schemas import TaskCreate
 from opal_think.settings_registry import SettingsRegistry
 from opal_think.store import ThinkStore
+from opal_think.textutil import ThinkStripper, strip_think_blocks
 
 logger = logging.getLogger("opal_think.engine")
 
@@ -246,7 +247,7 @@ class TaskEngine:
                 generation = await self._with_deadline(
                     task_id, adapter.generate(model_name, messages), row["timeout_seconds"]
                 )
-                text, tool_calls = generation.text, generation.tool_calls
+                text, tool_calls = strip_think_blocks(generation.text), generation.tool_calls
                 if text:
                     self._emit(task_id, "task.output", {"text": text})
             self._append_step(
@@ -272,10 +273,15 @@ class TaskEngine:
         raise OpalHTTPException(503, "step_limit", f"task exhausted max_steps={row['max_steps']} without an answer")
 
     async def _collect_stream(self, task_id: str, adapter: ProviderAdapter, model_name: str, messages: list) -> str:
+        stripper = ThinkStripper()
         parts: list[str] = []
         async for delta in adapter.stream_generate(model_name, messages):
-            parts.append(delta)
-            self._emit(task_id, "task.output", {"text": delta})
+            if visible := stripper.feed(delta):
+                parts.append(visible)
+                self._emit(task_id, "task.output", {"text": visible})
+        if tail := stripper.flush():
+            parts.append(tail)
+            self._emit(task_id, "task.output", {"text": tail})
         return "".join(parts)
 
     async def _with_deadline(self, task_id: str, awaitable, timeout: int):

@@ -424,6 +424,46 @@ def ask(
         raise typer.Exit(2)
 
 
+
+
+@think_app.command("chat")
+def chat(
+    ctx: typer.Context,
+    model: str = typer.Option(None, "--model", help="Model id"),
+    session_id: str = typer.Option(None, "--session-id", help="Resume an existing session"),
+    stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream output live"),
+) -> None:
+    """Session-based loop: creates a session when none is supplied; per turn submits a task."""
+    if not session_id:
+        session_id = _call(ctx, "POST", "/api/v1/sessions/", json={"title": None}).json()["id"]
+        typer.echo(f"(session {session_id})", err=True)
+    typer.echo("chat: 'exit' or Ctrl-D to quit", err=True)
+    while True:
+        try:
+            turn = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            typer.echo("")
+            break
+        if not turn or turn.lower() in {"exit", "quit"}:
+            break
+        body: dict[str, Any] = {"prompt": turn, "session_id": session_id}
+        if model:
+            body["model_id"] = model
+        try:
+            task = _call(ctx, "POST", "/api/v1/tasks/", json=body).json()
+            if stream:
+                _watch_stream(ctx, task["id"])
+            else:
+                _print_task(_await_task(ctx, task["id"]))
+            task = _call(ctx, "GET", f"/api/v1/tasks/{task['id']}").json()
+            if task["status"] != "completed":
+                typer.echo(f"(turn ended: {task['status']})", err=True)
+        except typer.Exit:
+            raise
+        except Exception as exc:  # noqa: BLE001 - keep the REPL alive on a failed turn
+            typer.echo(f"turn failed: {exc}", err=True)
+
+
 # -- `opal` root -------------------------------------------------------------------------------
 
 app = typer.Typer(help="OPAL command line.", no_args_is_help=True, pretty_exceptions_enable=False)
