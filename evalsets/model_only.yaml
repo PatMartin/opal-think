@@ -1,0 +1,11 @@
+name: model-only-answer
+description: A plain question completes without any EVENT involvement.
+cases:
+  - id: echo
+    prompt: "ping pong"
+    expect:
+      status: completed
+      answer_contains: "echo: ping pong"
+      event_calls: 0
+      steps:
+        - {kind: reasoning, status: succeeded}

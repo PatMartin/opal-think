@@ -108,6 +108,10 @@ def create_app(config: ThinkConfig | None = None) -> FastAPI:
         lambda key: (app.state.settings.get(key) or {}).get("value")
     )
     app.state.engine.reap_orphans()
+    app.state.store.sweep_retention(
+        (app.state.settings.get("task.retention_days") or {}).get("value", 30),
+        (app.state.settings.get("session.retention_days") or {}).get("value", 90),
+    )
 
     app.add_middleware(OpalContextMiddleware)
     app.add_exception_handler(OpalHTTPException, _opal_http_exception_handler)  # type: ignore[arg-type]

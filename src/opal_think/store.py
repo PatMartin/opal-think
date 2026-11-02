@@ -13,7 +13,7 @@ import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -251,6 +251,34 @@ class ThinkStore:
                 (session_id, limit),
             ).fetchall()
         return [(row["prompt"], row["answer"] or "") for row in reversed(rows)]
+
+    def sweep_retention(self, task_days: int, session_days: int) -> tuple[int, int]:
+        """Retention sweeps (the only task deletion; there is no task DELETE endpoint).
+
+        Terminal tasks older than ``task_days`` are removed. Sessions idle longer than
+        ``session_days`` (by ``updated_at``) with no active tasks cascade-delete their
+        retained task history. Returns (tasks_removed, sessions_removed).
+        """
+        task_cutoff = (datetime.now(UTC) - timedelta(days=task_days)).isoformat()
+        session_cutoff = (datetime.now(UTC) - timedelta(days=session_days)).isoformat()
+        with self._lock, self._connect() as conn:
+            tasks_removed = conn.execute(
+                "DELETE FROM tasks WHERE status IN ('completed','failed','cancelled','timed_out') AND finished_at < ?",
+                (task_cutoff,),
+            ).rowcount
+            stale = conn.execute(
+                "SELECT id FROM sessions WHERE updated_at < ? AND id NOT IN"
+                " (SELECT DISTINCT session_id FROM tasks WHERE status IN (?, ?))",
+                (session_cutoff, *ACTIVE_TASK_STATUSES),
+            ).fetchall()
+            for row in stale:
+                conn.execute("DELETE FROM tasks WHERE session_id = ?", (row["id"],))
+            sessions_removed = conn.execute(
+                "DELETE FROM sessions WHERE updated_at < ? AND id NOT IN"
+                " (SELECT DISTINCT session_id FROM tasks WHERE status IN (?, ?))",
+                (session_cutoff, *ACTIVE_TASK_STATUSES),
+            ).rowcount
+        return tasks_removed, sessions_removed
 
     def fail_active_tasks(self, error: dict[str, Any]) -> int:
         """Fail every queued/running task (used to reap orphans at startup)."""

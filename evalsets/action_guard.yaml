@@ -1,0 +1,52 @@
+name: action-guard
+description: >-
+  Scripted tool-call flows through FakeEventClient. Unregistered actions must
+  never reach EVENT; registered ones run to a terminal execution and the
+  result is fed back into the next reasoning step.
+cases:
+  - id: forbidden
+    prompt: "delete the gpu driver"
+    model_id: fake:script
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
+    script:
+      - tool_calls: [{action_id: remove_gpu_driver, event: {topic: gpu.remove, data: {}}}]
+      - text: "That action is not permitted; I will not run it."
+    expect:
+      status: completed
+      answer_contains: "not permitted"
+      event_calls: 0
+      steps:
+        - {kind: action, status: failed, action_id: remove_gpu_driver, action_input_null: true}
+  - id: registered
+    prompt: "run gpu diagnostics"
+    model_id: fake:script
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
+    action_results:
+      gpu_diagnostics: {status: succeeded, result: {gpu_temp_c: 63}}
+    script:
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: gpu.diag, data: {level: 1}}}]
+      - text: "GPU temperature is 63C"
+    expect:
+      status: completed
+      answer_contains: "63C"
+      event_calls: 1
+      called_actions: [gpu_diagnostics]
+      steps:
+        - kind: action
+          status: succeeded
+          action_id: gpu_diagnostics
+          action_input: {event: {topic: gpu.diag, data: {level: 1}}}
+  - id: execution-failed
+    prompt: "diagnose anyway"
+    model_id: fake:script
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
+    action_results:
+      gpu_diagnostics: {status: failed, error: {message: shell exited 1}}
+    script:
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: gpu.diag, data: {}}}]
+      - text: "The diagnostic failed; no action was retried."
+    expect:
+      status: completed
+      event_calls: 1
+      steps:
+        - {kind: action, status: failed, action_id: gpu_diagnostics}
