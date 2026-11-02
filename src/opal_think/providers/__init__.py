@@ -42,6 +42,7 @@ class ToolCallRequest:
 
     action_id: str
     event: dict[str, Any] = field(default_factory=dict)
+    call_id: str | None = None  # provider call correlation (OpenAI requires it on tool results)
 
 
 @dataclass

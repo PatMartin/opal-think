@@ -301,7 +301,10 @@ class TaskEngine:
             messages.append({"role": "assistant", "content": generation.text or ""})
             for call in tool_calls[:4]:  # bound: at most four action requests per reasoning step
                 outcome = await self._run_action(task_id, event_client, allowed, call, context, row)
-                messages.append({"role": "tool", "name": call.action_id or "tool", "content": outcome})
+                result_msg: dict[str, Any] = {"role": "tool", "name": call.action_id or "tool", "content": outcome}
+                if call.call_id:
+                    result_msg["tool_call_id"] = call.call_id
+                messages.append(result_msg)
         raise OpalHTTPException(503, "step_limit", f"task exhausted max_steps={row['max_steps']} without an answer")
 
     @staticmethod

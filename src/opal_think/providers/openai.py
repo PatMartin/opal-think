@@ -7,13 +7,14 @@ task-engine integration step. Credentials resolve from the configured secret ref
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
-from opal_think.providers import DiscoveredModel, Generation, ProviderUnavailable
+from opal_think.providers import DiscoveredModel, Generation, ProviderUnavailable, ToolCallRequest
 
 _DISCOVERY_TIMEOUT = 5.0
 
@@ -74,8 +75,61 @@ class OpenAIAdapter:
         tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
     ) -> Generation:
-        raise ProviderUnavailable("openai generation is not yet implemented (lands with the task engine step)")
+        payload: dict[str, Any] = {"model": model, "messages": messages}
+        if tools:
+            payload["tools"] = tools
+        try:
+            async with httpx.AsyncClient(timeout=120.0, transport=self._transport) as client:
+                response = await client.post(
+                    f"{self._base}/v1/chat/completions", headers=self._headers(), json=payload
+                )
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailable(f"openai chat failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise ProviderUnavailable(f"openai chat failed: HTTP {response.status_code}")
+        data = response.json()
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        tool_calls = [
+            ToolCallRequest(
+                action_id=(call.get("function") or {}).get("name", "unknown"),
+                event=_parse_args((call.get("function") or {}).get("arguments")),
+                call_id=call.get("id"),
+            )
+            for call in message.get("tool_calls") or []
+        ]
+        return Generation(
+            text=message.get("content") or "",
+            tool_calls=tool_calls,
+            finish_reason=choice.get("finish_reason"),
+            usage=data.get("usage") or {},
+        )
 
     async def stream_generate(self, model: str, messages: list[dict[str, Any]]) -> AsyncIterator[str]:
-        raise ProviderUnavailable("openai streaming is not yet implemented")
-        yield  # pragma: no cover - keep async-generator shape
+        payload = {"model": model, "messages": messages, "stream": True}
+        try:
+            async with (
+                httpx.AsyncClient(timeout=120.0, transport=self._transport) as client,
+                client.stream("POST", f"{self._base}/v1/chat/completions", headers=self._headers(), json=payload) as response,
+            ):
+                if response.status_code >= 400:
+                    raise ProviderUnavailable(f"openai chat failed: HTTP {response.status_code}")
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    for choice in json.loads(data).get("choices") or []:
+                        if content := (choice.get("delta") or {}).get("content"):
+                            yield content
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailable(f"openai chat failed: {exc}") from exc
+
+
+def _parse_args(raw: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        return parsed if isinstance(parsed, dict) else {"data": parsed}
+    except (json.JSONDecodeError, TypeError):
+        return {"data": raw}
