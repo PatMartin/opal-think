@@ -195,7 +195,7 @@ class ThinkStore:
                 [self._encode(v) for v in fields.values()] + [task_id],
             )
 
-    def append_task_step(self, task_id: str, step: dict[str, Any]) -> None:
+    def append_task_step(self, task_id: str, step: dict[str, Any]) -> dict[str, Any]:
         """Append a bounded step summary (auto-indexed) and bump steps_completed."""
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT steps FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -206,6 +206,7 @@ class ThinkStore:
                 "UPDATE tasks SET steps = ?, steps_completed = ? WHERE id = ?",
                 (json.dumps(steps), len(steps), task_id),
             )
+        return step
 
     def list_tasks(
         self,

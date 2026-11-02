@@ -10,6 +10,7 @@ integration step; today a task is one guarded generation producing its answer.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -17,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from opal_think.errors import OpalHTTPException
-from opal_think.providers import ProviderAdapter, ProviderUnavailable
+from opal_think.providers import DiscoveredModel, ProviderAdapter, ProviderUnavailable
 from opal_think.providers.registry import ProviderRegistry
 from opal_think.schemas import TaskCreate
 from opal_think.settings_registry import SettingsRegistry
@@ -31,6 +32,12 @@ _SYSTEM_PROMPT = (
     "registered OPAL-EVENT actions."
 )
 _SESSION_TURN_LIMIT = 10
+_TERMINAL_EVENTS = {
+    "completed": "task.completed",
+    "failed": "task.failed",
+    "cancelled": "task.cancelled",
+    "timed_out": "task.timed_out",
+}
 
 
 def _now() -> str:
@@ -52,6 +59,33 @@ class TaskEngine:
         self._providers = providers
         self._cancels: dict[str, asyncio.Event] = {}
         self._runners: dict[str, asyncio.Task] = {}
+        self._subscribers: dict[str, set[asyncio.Queue]] = {}
+
+    # -- live event fan-out (SSE; no replay guarantee) -------------------------------------------
+
+    def subscribe(self, task_id: str) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+        self._subscribers.setdefault(task_id, set()).add(queue)
+        return queue
+
+    def unsubscribe(self, task_id: str, queue: asyncio.Queue) -> None:
+        subs = self._subscribers.get(task_id)
+        if subs is not None:
+            subs.discard(queue)
+            if not subs:
+                del self._subscribers[task_id]
+
+    def _emit(self, task_id: str, event_type: str, data: dict[str, Any]) -> dict[str, Any]:
+        frame = {"task_id": task_id, "timestamp": _now(), "type": event_type, "data": data}
+        for queue in list(self._subscribers.get(task_id, ())):
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(frame)  # slow consumers drop frames; no replay guarantee
+        return frame
+
+    def _close_subscribers(self, task_id: str) -> None:
+        for queue in self._subscribers.pop(task_id, ()):
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(None)
 
     # -- admission ---------------------------------------------------------------------------
 
@@ -59,8 +93,8 @@ class TaskEngine:
         item = self._settings.get(key)
         return item["value"] if item else None
 
-    async def resolve_model(self, requested: str | None) -> tuple[ProviderAdapter, str, str]:
-        """Resolve the effective model for a task. Returns (adapter, model_name, resolved_id)."""
+    async def resolve_model(self, requested: str | None) -> tuple[ProviderAdapter, str, str, DiscoveredModel]:
+        """Resolve the effective model for a task. Returns (adapter, model_name, resolved_id, discovered)."""
         target = requested or self.setting("models.default_id")
         if target:
             provider_id, sep, name = target.partition(":")
@@ -75,14 +109,14 @@ class TaskEngine:
                 raise OpalHTTPException(503, "unavailable", f"model provider {provider_id} is unreachable") from exc
             if model is None or not model.available:
                 raise OpalHTTPException(422, "invalid_model", f"model is unknown or unavailable: {target}")
-            return adapter, name, target
+            return adapter, name, target, model
         pairs, failures = await self._providers.catalog()
         available = [(adapter, m) for adapter, m in pairs if m.available]
         if not available:
             detail = "no enabled provider is reachable" if failures else "no models are configured or enabled"
             raise OpalHTTPException(503, "unavailable", f"cannot accept task: {detail}")
         adapter, model = min(available, key=lambda pair: f"{pair[0].provider_id}:{pair[1].name}")
-        return adapter, model.name, f"{adapter.provider_id}:{model.name}"
+        return adapter, model.name, f"{adapter.provider_id}:{model.name}", model
 
     def causation_depth(self, causation_id: str | None) -> int:
         """Depth of the triggering chain as far as THINK can observe (THINK-owned ancestors only)."""
@@ -154,15 +188,16 @@ class TaskEngine:
 
     # -- execution ----------------------------------------------------------------------------
 
-    def start(self, adapter: ProviderAdapter, task_row: dict[str, Any]) -> None:
+    def start(self, adapter: ProviderAdapter, task_row: dict[str, Any], discovered: DiscoveredModel) -> None:
         self._cancels[task_row["id"]] = asyncio.Event()
-        self._runners[task_row["id"]] = asyncio.create_task(self._run(adapter, task_row))
+        self._runners[task_row["id"]] = asyncio.create_task(self._run(adapter, task_row, discovered))
 
-    async def _run(self, adapter: ProviderAdapter, row: dict[str, Any]) -> None:
+    async def _run(self, adapter: ProviderAdapter, row: dict[str, Any], discovered: DiscoveredModel) -> None:
         task_id = row["id"]
         self._store.update_task(task_id, status="running", started_at=_now())
+        self._emit(task_id, "task.started", {"status": "running", "model_id": row["model_id"]})
         try:
-            answer = await self._execute(task_id, adapter, row)
+            answer = await self._execute(task_id, adapter, row, discovered)
         except _TaskCancelled:
             self._finish(task_id, "cancelled")
         except _TaskTimeout:
@@ -182,36 +217,50 @@ class TaskEngine:
 
     def _finish(self, task_id: str, status: str, answer: str | None = None, error: dict | None = None) -> None:
         self._store.update_task(task_id, status=status, answer=answer, error=error, finished_at=_now())
+        data: dict[str, Any] = {"status": status}
+        if answer is not None:
+            data["answer"] = answer
+        if error is not None:
+            data["error"] = error
+        self._emit(task_id, _TERMINAL_EVENTS[status], data)
+        self._close_subscribers(task_id)
 
-    def _append_step(self, task_id: str, step: dict[str, Any]) -> None:
-        self._store.append_task_step(task_id, step)
+    def _append_step(self, task_id: str, step: dict[str, Any]) -> dict[str, Any]:
+        step = self._store.append_task_step(task_id, step)
+        self._emit(task_id, "task.progress", {"summary": step["summary"], "step": step["index"], "kind": step["kind"]})
+        return step
 
-    async def _execute(self, task_id: str, adapter: ProviderAdapter, row: dict[str, Any]) -> str:
+    async def _execute(self, task_id: str, adapter: ProviderAdapter, row: dict[str, Any], discovered: DiscoveredModel) -> str:
         """One guarded reasoning iteration: build messages, generate, record steps, answer."""
         model_name = row["model_id"].split(":", 1)[1]
         messages = self._build_messages(row)
         for step_index in range(1, row["max_steps"] + 1):
             if self._cancels[task_id].is_set():
                 raise _TaskCancelled
-            generation = await self._with_deadline(
-                task_id, adapter.generate(model_name, messages), row["timeout_seconds"]
-            )
+            if discovered.streaming:
+                text = await self._with_deadline(
+                    task_id, self._collect_stream(task_id, adapter, model_name, messages), row["timeout_seconds"]
+                )
+                tool_calls = []
+            else:
+                generation = await self._with_deadline(
+                    task_id, adapter.generate(model_name, messages), row["timeout_seconds"]
+                )
+                text, tool_calls = generation.text, generation.tool_calls
+                if text:
+                    self._emit(task_id, "task.output", {"text": text})
             self._append_step(
                 task_id,
-                {
-                    "kind": "reasoning",
-                    "summary": f"Reasoning step {step_index} finished",
-                    "status": "succeeded",
-                    "at": _now(),
-                },
+                {"kind": "reasoning", "summary": f"Reasoning step {step_index} finished", "status": "succeeded", "at": _now()},
             )
-            if generation.tool_calls:
+            if tool_calls:
+                self._emit(task_id, "task.action", {"action_id": tool_calls[0].action_id, "summary": "action requested"})
                 self._append_step(
                     task_id,
                     {
                         "kind": "action",
                         "summary": "Model requested an action, but no EVENT integration is available",
-                        "action_id": generation.tool_calls[0].action_id,
+                        "action_id": tool_calls[0].action_id,
                         "status": "failed",
                         "at": _now(),
                     },
@@ -219,8 +268,15 @@ class TaskEngine:
                 raise OpalHTTPException(
                     503, "event_unavailable", "model requested action execution but no OPAL-EVENT integration is configured"
                 )
-            return generation.text
+            return text
         raise OpalHTTPException(503, "step_limit", f"task exhausted max_steps={row['max_steps']} without an answer")
+
+    async def _collect_stream(self, task_id: str, adapter: ProviderAdapter, model_name: str, messages: list) -> str:
+        parts: list[str] = []
+        async for delta in adapter.stream_generate(model_name, messages):
+            parts.append(delta)
+            self._emit(task_id, "task.output", {"text": delta})
+        return "".join(parts)
 
     async def _with_deadline(self, task_id: str, awaitable, timeout: int):
         work = asyncio.ensure_future(awaitable)

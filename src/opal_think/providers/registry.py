@@ -40,21 +40,26 @@ class ProviderRegistry:
         self._settings = settings
         self._health_cache: tuple[float, int] | None = None
         self._event_cache: tuple[float, str] | None = None
+        self._adapter_cache: tuple[int, dict[str, ProviderAdapter]] | None = None
 
     def adapters(self) -> list[ProviderAdapter]:
-        """Enabled providers as fresh adapters (cheap; no connections held)."""
-        adapters: list[ProviderAdapter] = []
+        """Enabled providers as adapters; cached per settings revision so stateful fakes persist."""
+        revision = self._settings.store.global_revision()
+        if self._adapter_cache and self._adapter_cache[0] == revision:
+            return list(self._adapter_cache[1].values())
+        adapters: dict[str, ProviderAdapter] = {}
         for provider_id, cfg in provider_configs(self._settings).items():
             if not cfg.get("enabled"):
                 continue
             provider_type = cfg.get("type")
             if provider_type == "ollama":
-                adapters.append(OllamaAdapter(provider_id, cfg.get("base_url")))
+                adapters[provider_id] = OllamaAdapter(provider_id, cfg.get("base_url"))
             elif provider_type == "openai":
-                adapters.append(OpenAIAdapter(provider_id, cfg.get("base_url"), cfg.get("credential_ref")))
+                adapters[provider_id] = OpenAIAdapter(provider_id, cfg.get("base_url"), cfg.get("credential_ref"))
             elif provider_type == "fake":
-                adapters.append(FakeAdapter(provider_id))
-        return adapters
+                adapters[provider_id] = FakeAdapter(provider_id)
+        self._adapter_cache = (revision, adapters)
+        return list(adapters.values())
 
     def adapter_for(self, provider_id: str) -> ProviderAdapter | None:
         return next((a for a in self.adapters() if a.provider_id == provider_id), None)

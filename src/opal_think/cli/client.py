@@ -68,6 +68,14 @@ class ApiClient:
     def get(self, path: str, **kwargs: Any) -> httpx.Response:
         return self.request("GET", path, **kwargs)
 
+    def stream(self, path: str, **kwargs: Any):
+        """Open an SSE stream; caller checks status inside the context manager."""
+        headers = dict(kwargs.pop("headers", {}))
+        headers.setdefault("Accept", "text/event-stream")
+        if self._token:
+            headers.setdefault("Authorization", f"Bearer {self._token}")
+        return self._client.stream("GET", path, headers=headers, **kwargs)
+
     def post(self, path: str, **kwargs: Any) -> httpx.Response:
         return self.request("POST", path, **kwargs)
 

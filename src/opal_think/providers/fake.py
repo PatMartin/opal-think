@@ -26,7 +26,7 @@ _FAKE_MODELS = (
     DiscoveredModel(
         name="script",
         available=True,
-        streaming=True,
+        streaming=False,  # scripted generations may carry tool calls; stream is text-only
         tool_calling=True,
         structured_output=True,
         vision=False,
@@ -37,9 +37,10 @@ _FAKE_MODELS = (
 
 
 class FakeAdapter:
-    def __init__(self, provider_id: str) -> None:
+    def __init__(self, provider_id: str, delay: float = 0.0) -> None:
         self.provider_id = provider_id
         self.type = "fake"
+        self.delay = delay
         self.script: list[Generation] = []
         self.calls: list[dict[str, Any]] = []
 
@@ -60,6 +61,10 @@ class FakeAdapter:
         tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
     ) -> Generation:
+        import asyncio
+
+        if self.delay:
+            await asyncio.sleep(self.delay)
         self.calls.append({"model": model, "messages": messages, "tools": tools})
         if model == "script":
             if not self.script:
@@ -70,5 +75,6 @@ class FakeAdapter:
 
     async def stream_generate(self, model: str, messages: list[dict[str, Any]]) -> AsyncIterator[str]:
         result = await self.generate(model, messages)
-        for word in result.text.split(" "):
-            yield word + " "
+        words = result.text.split(" ")
+        for i, word in enumerate(words):
+            yield word + (" " if i < len(words) - 1 else "")

@@ -255,16 +255,26 @@ $("#ask-submit").addEventListener("click", async () => {
     const { body: task } = await api("/api/v1/tasks/", { method: "POST", body: JSON.stringify(body) });
     $("#ask-result").classList.remove("hidden");
     renderTask($("#ask-result"), task);
-    pollTask(task.id, $("#ask-result"));
+    watchTask(task.id, $("#ask-result"));
   } catch (e) { toast(`task: ${e.message}`); }
 });
 
-async function pollTask(id, el) {
-  try {
-    const { body: task } = await api(`/api/v1/tasks/${encodeURIComponent(id)}`);
-    renderTask(el, task);
-    if (!TERMINAL.has(task.status)) setTimeout(() => pollTask(id, el), 800);
-  } catch (e) { el.innerHTML += `<p class="muted">poll error: ${e.message}</p>`; }
+function watchTask(id, el) {
+  const src = new EventSource(`/api/v1/tasks/${encodeURIComponent(id)}/stream`);
+  let streamed = "";
+  const finish = async () => {
+    src.close();
+    try { renderTask(el, (await api(`/api/v1/tasks/${encodeURIComponent(id)}`)).body); }
+    catch (_) { /* final snapshot best-effort */ }
+  };
+  src.addEventListener("task.output", (e) => {
+    streamed += JSON.parse(e.data).data.text || "";
+    renderTask(el, { id, status: "running", model_id: "…", steps_completed: "…", steps: [], answer: streamed, error: null });
+  });
+  for (const t of ["task.completed", "task.failed", "task.cancelled", "task.timed_out"]) {
+    src.addEventListener(t, finish);
+  }
+  src.onerror = finish;  // disconnects and terminal races both end at the final snapshot
 }
 
 function renderTask(el, t) {

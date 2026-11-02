@@ -340,6 +340,90 @@ def task_show(ctx: typer.Context, task_id: str) -> None:
     _emit(ctx, _call(ctx, "GET", f"/api/v1/tasks/{task_id}").json())
 
 
+def _watch_stream(ctx: typer.Context, task_id: str) -> dict | None:
+    """Follow the task SSE stream to a terminal event; returns terminal frame data."""
+    state = _state(ctx)
+    json_mode = state.json_output
+    with state.client.stream(f"/api/v1/tasks/{task_id}/stream") as response:
+        if response.status_code >= 400:
+            raise ApiCallError(response.status_code, response.text)
+        saw_output = False
+        for line in response.iter_lines():
+            if line.startswith("data:"):
+                frame = json.loads(line[5:].strip())
+                if json_mode:
+                    typer.echo(json.dumps(frame, default=str))
+                else:
+                    data = frame["data"]
+                    if frame["type"] == "task.output":
+                        saw_output = True
+                        typer.echo(data.get("text", ""), nl=False)
+                    elif frame["type"] == "task.action":
+                        typer.echo(f"\n[action: {data.get('action_id')}]")
+                    elif frame["type"] == "task.progress":
+                        pass
+                    elif frame["type"] in _TERMINAL_EVENTS:
+                        # late connects get a terminal snapshot only; print its stored answer
+                        if not saw_output and data.get("answer"):
+                            typer.echo(data["answer"])
+                        typer.echo("")
+                if frame["type"] in _TERMINAL_EVENTS:
+                    return frame["data"]
+    return None
+
+
+_TERMINAL_EVENTS = {f"task.{s}" for s in _TERMINAL}
+
+
+@tasks_app.command("watch")
+def task_watch(ctx: typer.Context, task_id: str) -> None:
+    """Follow a task's live stream until its terminal state, then show the snapshot."""
+    _watch_stream(ctx, task_id)
+    data = _call(ctx, "GET", f"/api/v1/tasks/{task_id}").json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+    elif not data.get("answer"):
+        typer.echo(f"status={data['status']}" + (f"  error={data['error']['message']}" if data.get("error") else ""))
+    if data["status"] != "completed":
+        raise typer.Exit(2)
+
+
+@tasks_app.command("cancel")
+def task_cancel(ctx: typer.Context, task_id: str) -> None:
+    """Request cooperative cancellation (terminal tasks return 409)."""
+    data = _call(ctx, "POST", f"/api/v1/tasks/{task_id}/cancel").json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+    else:
+        typer.echo(f"{data['id']}  status={data['status']}  cancel_requested={data['cancel_requested']}")
+
+
+@think_app.command("ask")
+def ask(
+    ctx: typer.Context,
+    prompt: str,
+    model: str = typer.Option(None, "--model", help="Model id"),
+    session_id: str = typer.Option(None, "--session-id", help="Existing session id"),
+    stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream output live"),
+) -> None:
+    """One-shot task: create, watch the stream, print the answer."""
+    body: dict[str, Any] = {"prompt": prompt}
+    if model:
+        body["model_id"] = model
+    if session_id:
+        body["session_id"] = session_id
+    data = _call(ctx, "POST", "/api/v1/tasks/", json=body).json()
+    if stream:
+        _watch_stream(ctx, data["id"])
+    data = _await_task(ctx, data["id"]) if not stream else _call(ctx, "GET", f"/api/v1/tasks/{data['id']}").json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+    elif not stream:
+        _print_task(data)
+    if data["status"] != "completed":
+        raise typer.Exit(2)
+
+
 # -- `opal` root -------------------------------------------------------------------------------
 
 app = typer.Typer(help="OPAL command line.", no_args_is_help=True, pretty_exceptions_enable=False)
