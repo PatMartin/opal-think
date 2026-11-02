@@ -20,6 +20,7 @@ from opal_think.config import ThinkConfig
 from opal_think.deps import RuntimeState
 from opal_think.engine import TaskEngine
 from opal_think.errors import OpalHTTPException
+from opal_think.event_client import build_event_client
 from opal_think.opal_context import OpalContextMiddleware, get_opal_context
 from opal_think.providers.registry import ProviderRegistry
 from opal_think.routers import health, models, sessions, settings, tasks
@@ -101,7 +102,11 @@ def create_app(config: ThinkConfig | None = None) -> FastAPI:
     app.state.settings = SettingsRegistry(SettingsStore(config.db_path))
     app.state.store = ThinkStore(config.db_path)
     app.state.providers = ProviderRegistry(app.state.settings)
+    app.state.event_client = None  # test/eval override; production builds from settings
     app.state.engine = TaskEngine(app.state.store, app.state.settings, app.state.providers)
+    app.state.engine.event_client_factory = lambda: app.state.event_client or build_event_client(
+        lambda key: (app.state.settings.get(key) or {}).get("value")
+    )
     app.state.engine.reap_orphans()
 
     app.add_middleware(OpalContextMiddleware)

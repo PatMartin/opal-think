@@ -56,6 +56,8 @@ class ThinkStore:
             )
             self._ensure_column(conn, "tasks", "context", "TEXT")
             self._ensure_column(conn, "tasks", "steps_completed", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "tasks", "opal_session_id", "TEXT")
+            self._ensure_column(conn, "tasks", "opal_transaction_id", "TEXT")
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:

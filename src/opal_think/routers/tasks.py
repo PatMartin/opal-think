@@ -104,6 +104,8 @@ async def create_task(
         resolved_model_id=resolved_id,
         causation_id=ctx.causation_id,
         causation_depth=depth,
+        opal_session_id=ctx.session_id,
+        opal_transaction_id=ctx.transaction_id,
         idempotency_key=idempotency_key,
     )
     response.headers["Location"] = str(request.url_for("show_task", task_id=row["id"]))

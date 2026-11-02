@@ -18,6 +18,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from opal_think.errors import OpalHTTPException
+from opal_think.event_client import (
+    TERMINAL_EXECUTION_STATUSES,
+    sanitize_action_input,
+)
 from opal_think.providers import DiscoveredModel, ProviderAdapter, ProviderUnavailable
 from opal_think.providers.registry import ProviderRegistry
 from opal_think.schemas import TaskCreate
@@ -61,6 +65,11 @@ class TaskEngine:
         self._cancels: dict[str, asyncio.Event] = {}
         self._runners: dict[str, asyncio.Task] = {}
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
+        # wired by the app factory: returns an EVENT client or None (model-only mode)
+        self.event_client_factory = lambda: None
+
+    def _event_client(self):
+        return self.event_client_factory()
 
     # -- live event fan-out (SSE; no replay guarantee) -------------------------------------------
 
@@ -133,6 +142,8 @@ class TaskEngine:
         resolved_model_id: str,
         causation_id: str | None,
         causation_depth: int,
+        opal_session_id: str | None,
+        opal_transaction_id: str | None,
         idempotency_key: str | None,
     ) -> dict[str, Any]:
         """Atomically admit a task. Returns (row, replayed). Raises OpalHTTPException on rejection."""
@@ -181,6 +192,8 @@ class TaskEngine:
                 "finished_at": None,
                 "causation_id": causation_id,
                 "causation_depth": causation_depth,
+                "opal_session_id": opal_session_id,
+                "opal_transaction_id": opal_transaction_id,
             }
             self._store.insert_task_conn(conn, row)
             if idempotency_key:
@@ -232,20 +245,49 @@ class TaskEngine:
         return step
 
     async def _execute(self, task_id: str, adapter: ProviderAdapter, row: dict[str, Any], discovered: DiscoveredModel) -> str:
-        """One guarded reasoning iteration: build messages, generate, record steps, answer."""
+        """Guarded loop: reason -> validate tool calls -> EVENT execute+poll -> feed result -> repeat."""
         model_name = row["model_id"].split(":", 1)[1]
         messages = self._build_messages(row)
+        context = {
+            "session_id": row.get("opal_session_id"),
+            "transaction_id": row.get("opal_transaction_id"),
+            "causation_id": task_id,
+        }
+        event_client = self._event_client()
+        tools: list[dict[str, Any]] = []
+        allowed: set[str] = set()
+        if event_client is not None and discovered.tool_calling:
+            try:
+                actions = await event_client.list_actions(context)
+                allowed = {a["id"] for a in actions if a.get("enabled")}
+                tools = [self._tool_spec(a) for a in actions if a.get("enabled")]
+            except OpalHTTPException:
+                allowed, tools = set(), []  # EVENT down at discovery -> model-only mode
+            if tools:
+                names = ", ".join(sorted(allowed))
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "External actions are available only as OPAL-EVENT tool calls. "
+                            f"Enabled actions: {names}. To act, request a tool call whose arguments are "
+                            'an event envelope {"topic": <topic>, "data": {...}}. Never claim an action '
+                            "succeeded until the tool result says so."
+                        ),
+                    }
+                )
+        use_stream = discovered.streaming and not tools
         for step_index in range(1, row["max_steps"] + 1):
             if self._cancels[task_id].is_set():
                 raise _TaskCancelled
-            if discovered.streaming:
+            if use_stream:
                 text = await self._with_deadline(
                     task_id, self._collect_stream(task_id, adapter, model_name, messages), row["timeout_seconds"]
                 )
                 tool_calls = []
             else:
                 generation = await self._with_deadline(
-                    task_id, adapter.generate(model_name, messages), row["timeout_seconds"]
+                    task_id, adapter.generate(model_name, messages, tools=tools or None), row["timeout_seconds"]
                 )
                 text, tool_calls = strip_think_blocks(generation.text), generation.tool_calls
                 if text:
@@ -254,23 +296,84 @@ class TaskEngine:
                 task_id,
                 {"kind": "reasoning", "summary": f"Reasoning step {step_index} finished", "status": "succeeded", "at": _now()},
             )
-            if tool_calls:
-                self._emit(task_id, "task.action", {"action_id": tool_calls[0].action_id, "summary": "action requested"})
-                self._append_step(
-                    task_id,
-                    {
-                        "kind": "action",
-                        "summary": "Model requested an action, but no EVENT integration is available",
-                        "action_id": tool_calls[0].action_id,
-                        "status": "failed",
-                        "at": _now(),
-                    },
-                )
-                raise OpalHTTPException(
-                    503, "event_unavailable", "model requested action execution but no OPAL-EVENT integration is configured"
-                )
-            return text
+            if not tool_calls:
+                return text
+            messages.append({"role": "assistant", "content": generation.text or ""})
+            for call in tool_calls[:4]:  # bound: at most four action requests per reasoning step
+                outcome = await self._run_action(task_id, event_client, allowed, call, context, row)
+                messages.append({"role": "tool", "name": call.action_id or "tool", "content": outcome})
         raise OpalHTTPException(503, "step_limit", f"task exhausted max_steps={row['max_steps']} without an answer")
+
+    @staticmethod
+    def _tool_spec(action: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": action["id"],
+                "description": f"OPAL-EVENT action '{action['id']}' (type={action.get('type', 'unknown')})",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string", "description": "EVENT event topic"},
+                        "data": {"type": "object", "description": "EVENT event data payload"},
+                    },
+                    "required": ["topic", "data"],
+                },
+            },
+        }
+
+    async def _run_action(self, task_id, event_client, allowed, call, context, row) -> str:
+        """Validate + submit one tool call through EVENT and poll to terminal. Returns tool-result text."""
+        action_id = call.action_id or "unknown"
+        if event_client is None:
+            self._action_step(task_id, action_id, None, None, "failed", "no EVENT integration is configured")
+            return json.dumps({"status": "error", "error": "event_unavailable"})
+        if action_id not in allowed:
+            self._action_step(task_id, action_id, None, None, "failed", "action unknown or disabled")
+            return json.dumps({"status": "error", "error": "unknown_or_disabled_action"})
+        args = call.event or {}
+        event = {
+            "topic": args.get("topic") if isinstance(args.get("topic"), str) else "task.action",
+            "data": args.get("data") if isinstance(args.get("data"), dict) else args,
+        }
+        action_input = sanitize_action_input({"event": event})
+        execution = await self._with_deadline(
+            task_id, event_client.execute(action_id, event, context), row["timeout_seconds"]
+        )
+        execution_id = execution.get("id")
+        self._emit(task_id, "task.action", {"action_id": action_id, "execution_id": execution_id, "summary": "action submitted"})
+        deadline = asyncio.get_event_loop().time() + row["timeout_seconds"]
+        while True:
+            if self._cancels[task_id].is_set():
+                raise _TaskCancelled
+            record = await self._with_deadline(
+                task_id, event_client.get_execution(execution_id, context), row["timeout_seconds"]
+            )
+            status = record.get("status", "unknown")
+            if status in TERMINAL_EXECUTION_STATUSES:
+                break
+            if asyncio.get_event_loop().time() > deadline:
+                status = "timed_out"
+                break
+            await asyncio.sleep(0.5)
+        summary = f"action {action_id} {status}"
+        self._action_step(task_id, action_id, execution_id, action_input, status, summary)
+        result = record.get("result") if status == "succeeded" else record.get("error") or record.get("reason")
+        return json.dumps({"status": status, "result": result}, default=str)
+
+    def _action_step(self, task_id, action_id, execution_id, action_input, status, summary) -> None:
+        self._append_step(
+            task_id,
+            {
+                "kind": "action",
+                "summary": summary,
+                "action_id": action_id,
+                "execution_id": execution_id,
+                "action_input": action_input,
+                "status": status,
+                "at": _now(),
+            },
+        )
 
     async def _collect_stream(self, task_id: str, adapter: ProviderAdapter, model_name: str, messages: list) -> str:
         stripper = ThinkStripper()
