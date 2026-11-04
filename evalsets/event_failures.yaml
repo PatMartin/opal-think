@@ -1,0 +1,54 @@
+name: event-failures
+description: >-
+  EVENT-side failure modes: shell stdout normalization, execution failure
+  feedback, EVENT rejection, and unavailable-service degradation.
+cases:
+  - id: shell-stdout-result
+    prompt: "read the gpu log"
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
+    action_results:
+      gpu_diagnostics: {status: succeeded, exit_code: 0, stdout: "GPU0 temp=63C", stderr: ""}
+    script:
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: gpu.diag, data: {}}}]
+      - text: "GPU is 63C"
+    expect:
+      status: completed
+      event_calls: 1
+      tool_result_contains: ["GPU0 temp=63C", "succeeded"]
+      steps:
+        - {kind: action, status: succeeded, action_id: gpu_diagnostics}
+  - id: event-rejects-args
+    prompt: "call with bad args"
+    actions: [{id: fragile, enabled: true, type: http}]
+    event_reject: [fragile]
+    script:
+      - tool_calls: [{action_id: fragile, event: {topic: t, data: {}}}]
+      - text: "EVENT rejected the call"
+    expect:
+      status: completed
+      event_calls: 0
+      steps:
+        - {kind: action, status: failed, action_id: fragile}
+  - id: event-unavailable
+    prompt: "act without event"
+    event_unavailable: true
+    script:
+      - text: "No external actions available; answering directly."
+    expect:
+      status: completed
+      answer_contains: "answering directly"
+      event_calls: 0
+  - id: failed-execution-feedback
+    prompt: "diagnose and report"
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
+    action_results:
+      gpu_diagnostics: {status: failed, exit_code: 1, stderr: "permission denied", error_code: "shell_exit", error_message: "process exited 1"}
+    script:
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: t, data: {}}}]
+      - text: "The diagnostic failed with permission denied."
+    expect:
+      status: completed
+      event_calls: 1
+      tool_result_contains: ["permission denied", "shell_exit"]
+      steps:
+        - {kind: action, status: failed, action_id: gpu_diagnostics}

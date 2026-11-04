@@ -1,0 +1,56 @@
+name: lifecycle
+description: >-
+  Deterministic lifecycle coverage: absolute task deadlines, cooperative
+  cancellation, idempotent replay, step-limit overflow, and multi-tool rounds.
+cases:
+  - id: timeout-deadline
+    prompt: "slow multi-step work"
+    delay: 0.4
+    task: {timeout_seconds: 1, max_steps: 8}
+    script:
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: t, data: {}}}]
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: t, data: {}}}]
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: t, data: {}}}]
+      - text: "should never be reached"
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
+    expect:
+      status: timed_out
+      error_code: timed_out
+  - id: cancel-cooperative
+    prompt: "cancel me"
+    delay: 3.0
+    cancel_after: 0.3
+    expect:
+      status: cancelled
+  - id: idempotent-replay
+    prompt: "same question twice"
+    idempotent_replay: true
+    expect:
+      status: completed
+      replayed: true
+  - id: step-limit-overflow
+    prompt: "loop forever"
+    task: {max_steps: 2}
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
+    script:
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: t, data: {}}}]
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: t, data: {}}}]
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: t, data: {}}}]
+    expect:
+      status: failed
+      error_code: step_limit
+  - id: multi-tool-round
+    prompt: "run two diagnostics"
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}, {id: announce_person, enabled: true, type: shell}]
+    script:
+      - tool_calls:
+          - {action_id: gpu_diagnostics, event: {topic: t, data: {a: 1}}}
+          - {action_id: announce_person, event: {topic: t, data: {b: 2}}}
+      - text: "both diagnostics finished"
+    expect:
+      status: completed
+      event_calls: 2
+      called_actions: [gpu_diagnostics, announce_person]
+      steps:
+        - {kind: action, status: succeeded, action_id: gpu_diagnostics}
+        - {kind: action, status: succeeded, action_id: announce_person}

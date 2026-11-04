@@ -60,8 +60,16 @@ Deterministic, caller-side (contract: "no evalset management API"). YAML cases i
 `FakeEventClient`, asserting status/answer/steps and **what never reached EVENT**:
 
 ```bash
-pytest tests/eval          # runs evalsets/*.yaml cases
+pytest tests/eval          # runs evalsets/*.yaml cases (live cases skip)
+python scripts/run_evals.py  # writes evalsets/report.json: counts + per-case outcomes
 ```
+
+Case types covered: model-only answers, guarded/forbidden actions, multi-tool
+rounds, schema-rejected args, EVENT 422/5xx/unavailable, shell stdout
+normalization, absolute deadlines, cooperative cancel, step-limit overflow, and
+idempotent replay. `evalsets/live_ollama.yaml` is opt-in
+(`OPAL_THINK_LIVE_OLLAMA` + `OPAL_THINK_LIVE_MODEL`) — report entries mark
+simulated vs real-model runs distinctly with model/endpoint/git provenance.
 
 ## Verification status
 

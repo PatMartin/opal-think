@@ -1,0 +1,11 @@
+name: live-ollama
+description: >-
+  Opt-in real-model cases. Require OPAL_THINK_LIVE_OLLAMA + OPAL_THINK_LIVE_MODEL;
+  always marked live in reports, never part of the deterministic run.
+live: true
+cases:
+  - id: real-answer
+    prompt: "Reply with exactly: Pong!"
+    task: {timeout_seconds: 120}
+    expect:
+      status: completed

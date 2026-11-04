@@ -1,0 +1,113 @@
+{
+  "generated_by": "opal-think evalset runner",
+  "environment": {
+    "python": "3.13.3",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "git_sha": "ca9f9d496bfbff12f5edc0dff7f7b76225d7d97c",
+    "live_ran": false
+  },
+  "counts": {
+    "total": 14,
+    "passed": 13,
+    "failed": 0,
+    "skipped_live": 1
+  },
+  "cases": [
+    {
+      "evalset": "action-guard",
+      "case_id": "forbidden",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "action-guard",
+      "case_id": "registered",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "action-guard",
+      "case_id": "execution-failed",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "event-failures",
+      "case_id": "shell-stdout-result",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "event-failures",
+      "case_id": "event-rejects-args",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "event-failures",
+      "case_id": "event-unavailable",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "event-failures",
+      "case_id": "failed-execution-feedback",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "lifecycle",
+      "case_id": "timeout-deadline",
+      "outcome": "pass",
+      "task_status": "timed_out",
+      "live": false
+    },
+    {
+      "evalset": "lifecycle",
+      "case_id": "cancel-cooperative",
+      "outcome": "pass",
+      "task_status": "cancelled",
+      "live": false
+    },
+    {
+      "evalset": "lifecycle",
+      "case_id": "idempotent-replay",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "lifecycle",
+      "case_id": "step-limit-overflow",
+      "outcome": "pass",
+      "task_status": "failed",
+      "live": false
+    },
+    {
+      "evalset": "lifecycle",
+      "case_id": "multi-tool-round",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "live-ollama",
+      "case_id": "real-answer",
+      "outcome": "skipped_live"
+    },
+    {
+      "evalset": "model-only-answer",
+      "case_id": "echo",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    }
+  ]
+}
