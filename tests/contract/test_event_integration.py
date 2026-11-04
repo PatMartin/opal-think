@@ -260,3 +260,68 @@ def test_execution_fields_reach_model(task_client: TestClient) -> None:
     assert payload["stdout"] == "GPU0 temp=63C"
     assert payload["exit_code"] == 0
     assert payload["result"] == {"gpu_temp_c": 63}
+
+
+def _catalog_with_schema() -> list[dict]:
+    return [
+        {
+            "id": "announce_person",
+            "type": "shell",
+            "enabled": True,
+            "description": "Announce a person detected by a camera.",
+            "input_schema": {"type": "object", "properties": {"camera": {"type": "string"}}, "required": ["camera"]},
+            "keywords": ["camera"],
+        }
+    ]
+
+
+def test_schema_invalid_args_rejected_before_submit(task_client: TestClient) -> None:
+    event = FakeEventClient(actions=_catalog_with_schema())
+    task = _script_task(
+        task_client,
+        [
+            Generation("", tool_calls=[ToolCallRequest("announce_person", {"topic": "t", "data": {"camera": 42}})]),
+            Generation("args were rejected, fixing"),
+        ],
+        event,
+    )
+    assert task["status"] == "completed"
+    assert event.calls == []  # invalid args never reached EVENT
+    action_steps = [s for s in task["steps"] if s["kind"] == "action"]
+    assert action_steps[0]["status"] == "failed" and "input_schema" in action_steps[0]["summary"]
+    round2 = _fake(task_client).calls[-1]["messages"]
+    tool_msg = next(m for m in round2 if m["role"] == "tool")
+    assert "invalid_arguments" in tool_msg["content"]
+
+
+def test_schema_valid_args_execute_normally(task_client: TestClient) -> None:
+    event = FakeEventClient(actions=_catalog_with_schema())
+    task = _script_task(
+        task_client,
+        [
+            Generation("", tool_calls=[ToolCallRequest("announce_person", {"topic": "t", "data": {"camera": "front"}})]),
+            Generation("announced"),
+        ],
+        event,
+    )
+    assert task["status"] == "completed"
+    assert len(event.calls) == 1 and event.calls[0]["event"]["data"] == {"camera": "front"}
+
+
+def test_event_422_rejection_feeds_back_safely(task_client: TestClient) -> None:
+    event = FakeEventClient(actions=[{"id": "fragile", "type": "http", "enabled": True}])
+    event.reject_ids.add("fragile")
+    task = _script_task(
+        task_client,
+        [
+            Generation("", tool_calls=[ToolCallRequest("fragile", {"topic": "t", "data": {}})]),
+            Generation("EVENT rejected it"),
+        ],
+        event,
+    )
+    assert task["status"] == "completed"  # rejection is feedback, not task failure
+    action_steps = [s for s in task["steps"] if s["kind"] == "action"]
+    assert action_steps[0]["status"] == "failed" and "rejected" in action_steps[0]["summary"]
+    round2 = _fake(task_client).calls[-1]["messages"]
+    tool_msg = next(m for m in round2 if m["role"] == "tool")
+    assert "event_rejected" in tool_msg["content"]

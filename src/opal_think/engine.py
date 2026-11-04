@@ -17,6 +17,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+import jsonschema
+
 from opal_think.errors import OpalHTTPException
 from opal_think.event_client import (
     TERMINAL_EXECUTION_STATUSES,
@@ -303,13 +305,15 @@ class TaskEngine:
         event_client = self._event_client()
         tools: list[dict[str, Any]] = []
         allowed: set[str] = set()
+        schemas: dict[str, Any] = {}
         if event_client is not None and self._tools_allowed(discovered):
             try:
                 actions = await event_client.list_actions(context)
                 allowed = {a["id"] for a in actions if a.get("enabled")}
+                schemas = {a["id"]: a.get("input_schema") for a in actions if a.get("enabled")}
                 tools = [self._tool_spec(a) for a in actions if a.get("enabled")]
             except OpalHTTPException:
-                allowed, tools = set(), []  # EVENT down at discovery -> model-only mode
+                allowed, tools, schemas = set(), [], {}  # EVENT down at discovery -> model-only mode
             if tools:
                 names = ", ".join(sorted(allowed))
                 messages.append(
@@ -363,29 +367,54 @@ class TaskEngine:
                         f"action request dropped: exceeds {_MAX_ACTION_CALLS_PER_STEP} per step",
                     )
                 else:
-                    outcome = await self._run_action(task_id, event_client, allowed, call, context, row, deadline)
+                    outcome = await self._run_action(task_id, event_client, allowed, schemas, call, context, row, deadline)
                 messages.append(adapter.tool_result_message(call, outcome))
         raise OpalHTTPException(503, "step_limit", f"task exhausted max_steps={row['max_steps']} without an answer")
 
     @staticmethod
-    def _tool_spec(action: dict[str, Any]) -> dict[str, Any]:
+    def _safe_hint(value: Any, limit: int = 160) -> str:
+        """Action metadata is untrusted discovery material: printable only, bounded."""
+        return "".join(c for c in str(value) if c.isprintable() or c in " \t")[:limit].strip()
+
+    @classmethod
+    def _tool_spec(cls, action: dict[str, Any]) -> dict[str, Any]:
+        """Tool spec for one EVENT action. Uses optional metadata when present:
+        ``description`` becomes the tool description, ``input_schema`` maps to the
+        ``data`` parameter, keywords/suggested_prompts appear only as bounded
+        discovery hints — never as instructions. Old EVENT catalogs degrade to a
+        generic spec."""
+        description = cls._safe_hint(action.get("description"), 512) if action.get("description") else ""
+        if not description:
+            description = f"OPAL-EVENT action '{action['id']}' (type={action.get('type', 'unknown')})"
+        hints = []
+        keywords = [k for k in action.get("keywords") or [] if isinstance(k, str)][:8]
+        if keywords:
+            hints.append("keywords: " + ", ".join(cls._safe_hint(k, 64) for k in keywords))
+        prompts = [p for p in action.get("suggested_prompts") or [] if isinstance(p, str)][:4]
+        if prompts:
+            hints.append("example uses: " + "; ".join(cls._safe_hint(p) for p in prompts))
+        if hints:
+            description += " [hints: " + "; ".join(hints) + "]"
+        data_param: dict[str, Any] = {"type": "object", "description": "EVENT event data payload"}
+        if isinstance(action.get("input_schema"), dict):
+            data_param = action["input_schema"]
         return {
             "type": "function",
             "function": {
                 "name": action["id"],
-                "description": f"OPAL-EVENT action '{action['id']}' (type={action.get('type', 'unknown')})",
+                "description": description,
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "topic": {"type": "string", "description": "EVENT event topic"},
-                        "data": {"type": "object", "description": "EVENT event data payload"},
+                        "data": data_param,
                     },
                     "required": ["topic", "data"],
                 },
             },
         }
 
-    async def _run_action(self, task_id, event_client, allowed, call, context, row, deadline) -> str:
+    async def _run_action(self, task_id, event_client, allowed, schemas, call, context, row, deadline) -> str:
         """Validate + submit one tool call through EVENT and poll to terminal. Returns tool-result text."""
         action_id = call.action_id or "unknown"
         if event_client is None:
@@ -402,12 +431,30 @@ class TaskEngine:
             "topic": args.get("topic") if isinstance(args.get("topic"), str) else "task.action",
             "data": args.get("data") if isinstance(args.get("data"), dict) else args,
         }
+        # Client-side check against the catalog's declared input_schema; EVENT
+        # remains the ultimate authority and re-validates server-side.
+        schema = schemas.get(action_id)
+        if isinstance(schema, dict):
+            try:
+                jsonschema.validate(event["data"], schema)
+            except jsonschema.ValidationError as exc:
+                detail = exc.message[:200]
+                self._action_step(task_id, action_id, None, None, "failed", f"arguments rejected by input_schema: {detail}")
+                return json.dumps({"status": "error", "error": "invalid_arguments", "detail": detail})
+            except jsonschema.SchemaError:
+                pass  # malformed catalog schema -> let EVENT arbitrate
         action_input = sanitize_action_input({"event": event})
         # NOTE: submitting to EVENT is a real side effect. Cancelling THINK afterwards
         # does not undo it — EVENT may keep running the execution we already admitted.
-        execution = await self._with_deadline(
-            task_id, event_client.execute(action_id, event, context), self._remaining(task_id, deadline)
-        )
+        try:
+            execution = await self._with_deadline(
+                task_id, event_client.execute(action_id, event, context), self._remaining(task_id, deadline)
+            )
+        except OpalHTTPException as exc:
+            if exc.status_code >= 500:
+                raise
+            self._action_step(task_id, action_id, None, action_input, "failed", f"EVENT rejected request: {exc.code}")
+            return json.dumps({"status": "error", "error": "event_rejected", "detail": exc.message[:500]})
         execution_id = execution.get("id")
         self._emit(task_id, "task.action", {"action_id": action_id, "execution_id": execution_id, "summary": "action submitted"})
         while True:

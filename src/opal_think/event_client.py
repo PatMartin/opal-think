@@ -126,8 +126,19 @@ class HttpEventClient:
             raise EventUnavailable(f"EVENT unreachable: {exc}") from exc
         if response.status_code == 404:
             raise OpalHTTPException(404, "not_found", f"EVENT resource not found: {path}")
-        if response.status_code >= 400:
+        if response.status_code >= 500:
             raise EventUnavailable(f"EVENT returned HTTP {response.status_code} for {method} {path}")
+        if response.status_code >= 400:
+            # 4xx means EVENT rejected the request (validation/auth) — surface its
+            # error envelope so callers can distinguish rejection from unavailability.
+            code, message = "event_rejected", f"EVENT returned HTTP {response.status_code} for {method} {path}"
+            try:
+                envelope = response.json().get("error") or {}
+                code = envelope.get("code") or code
+                message = envelope.get("message") or message
+            except ValueError:
+                pass
+            raise OpalHTTPException(response.status_code, code, f"EVENT rejected {method} {path}: {message}")
         return response
 
     async def list_actions(self, context: dict[str, str | None]) -> list[dict[str, Any]]:
@@ -154,6 +165,7 @@ class FakeEventClient:
         ]
         self.results: dict[str, dict[str, Any]] = {}  # action_id -> terminal execution fields
         self.calls: list[dict[str, Any]] = []
+        self.reject_ids: set[str] = set()  # action_ids whose execute raises a 422 rejection
         self._seq = 0
 
     def set_result(self, action_id: str, **fields: Any) -> None:
@@ -163,6 +175,8 @@ class FakeEventClient:
         return list(self.actions)
 
     async def execute(self, action_id: str, event: dict[str, Any], context: dict[str, str | None]) -> dict[str, Any]:
+        if action_id in self.reject_ids:
+            raise OpalHTTPException(422, "event_rejected", f"EVENT rejected action '{action_id}' input_schema")
         self._seq += 1
         execution_id = f"exec_{self._seq}"
         self.calls.append({"action_id": action_id, "event": event, "execution_id": execution_id})
