@@ -20,6 +20,7 @@ from typing import Any
 from opal_think.errors import OpalHTTPException
 from opal_think.event_client import (
     TERMINAL_EXECUTION_STATUSES,
+    normalize_execution_result,
     sanitize_action_input,
 )
 from opal_think.providers import DiscoveredModel, ProviderAdapter, ProviderUnavailable
@@ -374,8 +375,7 @@ class TaskEngine:
             await asyncio.sleep(0.5)
         summary = f"action {action_id} {status}"
         self._action_step(task_id, action_id, execution_id, action_input, status, summary)
-        result = record.get("result") if status == "succeeded" else record.get("error") or record.get("reason")
-        return json.dumps({"status": status, "result": result}, default=str)
+        return json.dumps(normalize_execution_result(record), default=str)
 
     def _action_step(self, task_id, action_id, execution_id, action_input, status, summary) -> None:
         self._append_step(

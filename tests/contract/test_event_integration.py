@@ -229,3 +229,34 @@ def test_call_ids_assigned_and_correlated(task_client: TestClient) -> None:
     call_entry = assistant_tool_msg["tool_calls"][0]["function"]
     assert call_entry["name"] == "gpu_diagnostics"
     assert tool_msgs[0]["name"] == "gpu_diagnostics"
+
+
+def test_execution_fields_reach_model(task_client: TestClient) -> None:
+    """A realistic EVENT Execution record (stdout + error fields) reaches the model intact."""
+    event = FakeEventClient()
+    event.set_result(
+        "gpu_diagnostics",
+        status="succeeded",
+        exit_code=0,
+        stdout="GPU0 temp=63C",
+        stderr="",
+        result={"gpu_temp_c": 63},
+    )
+    task = _script_task(
+        task_client,
+        [
+            Generation("", tool_calls=[ToolCallRequest("gpu_diagnostics", {"topic": "t", "data": {}})]),
+            Generation("temp is 63C"),
+        ],
+        event,
+    )
+    assert task["status"] == "completed"
+    round2 = _fake(task_client).calls[-1]["messages"]
+    tool_msg = next(m for m in round2 if m["role"] == "tool")
+    import json as _json
+
+    payload = _json.loads(tool_msg["content"])
+    assert payload["status"] == "succeeded"
+    assert payload["stdout"] == "GPU0 temp=63C"
+    assert payload["exit_code"] == 0
+    assert payload["result"] == {"gpu_temp_c": 63}

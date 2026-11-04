@@ -22,7 +22,11 @@ from opal_think.errors import OpalHTTPException
 TERMINAL_EXECUTION_STATUSES = {"succeeded", "failed", "timed_out", "dropped"}
 _SENSITIVE_HINTS = ("password", "passwd", "secret", "token", "api_key", "apikey", "credential", "private_key")
 _MAX_ACTION_INPUT_BYTES = 4096
+_MAX_EXECUTION_FIELD_CHARS = 2000  # per stdout/stderr/error_message/result-string
 _POLL_INTERVAL = 0.5
+
+_DROPPED_REASON = "execution dropped by EVENT (queue full or action disabled)"
+_TIMED_OUT_REASON = "execution exceeded the action's deadline"
 
 
 class EventUnavailable(OpalHTTPException):
@@ -30,23 +34,56 @@ class EventUnavailable(OpalHTTPException):
         super().__init__(503, "event_unavailable", message)
 
 
+def _redact(node: Any, depth: int = 0, truncate: bool = True) -> Any:
+    """Mask secret-looking dict keys; drop over-deep content; stringify unknowns.
+
+    ``truncate`` bounds individual strings (execution *results*); action *inputs*
+    keep full strings so the recorded input either is faithful or becomes None.
+    """
+    if depth > 8:
+        return None
+    if isinstance(node, dict):
+        return {
+            k: ("***" if any(h in str(k).lower() for h in _SENSITIVE_HINTS) else _redact(v, depth + 1, truncate))
+            for k, v in node.items()
+        }
+    if isinstance(node, list):
+        return [_redact(v, depth + 1, truncate) for v in node]
+    if isinstance(node, str):
+        if truncate and len(node) > _MAX_EXECUTION_FIELD_CHARS:
+            return node[: _MAX_EXECUTION_FIELD_CHARS] + "…[truncated]"
+        return node
+    return node if isinstance(node, (int, float, bool)) or node is None else str(node)
+
+
+def normalize_execution_result(record: dict[str, Any]) -> dict[str, Any]:
+    """Terminal EVENT Execution record -> bounded, redacted, model-readable tool result.
+
+    Carries every informative field EVENT reports (status/result/stdout/stderr/
+    exit_code/http_status/error_code/error_message); never fabricates fields the
+    record does not contain. ``dropped``/``timed_out`` get an explanatory reason so
+    the model can act on them intelligibly.
+    """
+    out: dict[str, Any] = {"status": record.get("status", "unknown")}
+    if record.get("id"):
+        out["execution_id"] = record["id"]
+    for key in ("result", "stdout", "stderr", "exit_code", "http_status", "error_code", "error_message"):
+        if record.get(key) is not None:
+            out[key] = record[key]
+    if out["status"] == "dropped" and "reason" not in out:
+        out["reason"] = _DROPPED_REASON
+    if out["status"] == "timed_out" and "reason" not in out and "error_message" not in out:
+        out["reason"] = _TIMED_OUT_REASON
+    safe = _redact(out)
+    if len(json.dumps(safe, default=str).encode()) > _MAX_ACTION_INPUT_BYTES:
+        safe = {"status": out["status"], "execution_id": out.get("execution_id"), "error": "result too large"}
+    return safe
+
+
 def sanitize_action_input(payload: dict[str, Any]) -> dict[str, Any] | None:
     """Redact secret-looking values and bound size; None when no safe representation exists."""
-
-    def walk(node: Any, depth: int = 0) -> Any:
-        if depth > 8:
-            return None
-        if isinstance(node, dict):
-            return {
-                k: ("***" if any(h in str(k).lower() for h in _SENSITIVE_HINTS) else walk(v, depth + 1))
-                for k, v in node.items()
-            }
-        if isinstance(node, list):
-            return [walk(v, depth + 1) for v in node]
-        return node if isinstance(node, (str, int, float, bool)) or node is None else str(node)
-
     try:
-        safe = walk(payload)
+        safe = _redact(payload, truncate=False)
         if len(json.dumps(safe, default=str).encode()) > _MAX_ACTION_INPUT_BYTES:
             return None
         return safe
