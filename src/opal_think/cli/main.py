@@ -9,7 +9,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import click
 import typer
+from typer.main import get_command
 
 from opal_think.cli.client import ApiCallError, ApiClient, api_url_from_env, token_from_env
 
@@ -489,6 +491,50 @@ try:
     app.add_typer(listen_app, name="listen")
 except Exception:  # noqa: BLE001
     pass
+
+
+
+def _param_label(param: click.Parameter) -> str:
+    """One tree node: [--flag] for optional, --flag for required, <arg>/[<arg>] for arguments.
+
+    Typer vendors its own click classes, so options are detected by the presence
+    of ``opts`` rather than isinstance."""
+    opts = list(getattr(param, "opts", None) or []) + list(getattr(param, "secondary_opts", None) or [])
+    if any(o.startswith("-") for o in opts):
+        label = next((o for o in opts if o.startswith("--")), opts[0])
+        text = label if param.required else f"[{label}]"
+    else:  # positional argument (vendored click Arguments expose non-dash opts too)
+        text = f"<{param.name}>" if param.required else f"[<{param.name}>]"
+    if param.help:
+        text += f"  # {param.help}"
+    return text
+
+
+def _tree_lines(command: click.Command, prefix: str, lines: list[str]) -> None:
+    """Depth-first walk: parameters then subcommands, sorted, ASCII connectors."""
+    params = sorted(
+        (p for p in getattr(command, "params", []) if "--help" not in (getattr(p, "opts", None) or [])),
+        key=lambda p: p.name,
+    )
+    subs = sorted((getattr(command, "commands", None) or {}).items())
+    items: list[tuple[str, object]] = [("param", p) for p in params] + [("cmd", s) for s in subs]
+    for index, (kind, item) in enumerate(items):
+        last = index == len(items) - 1
+        connector = "`-- " if last else "|-- "
+        if kind == "param":
+            lines.append(prefix + connector + _param_label(item))
+        else:
+            name, sub = item
+            lines.append(prefix + connector + name)
+            _tree_lines(sub, prefix + ("    " if last else "|   "), lines)
+
+
+@think_app.command("tree", help="Print the full CLI command/argument tree.")
+def tree_cmd() -> None:
+    """Render the rooted ASCII tree of every command and argument (skips --help)."""
+    lines = ["opal-think"]
+    _tree_lines(get_command(think_app), "", lines)
+    typer.echo("\n".join(lines))
 
 
 if __name__ == "__main__":
