@@ -29,7 +29,7 @@ reachable provider, readiness honestly returns 503.
 | POST /tasks/ | `task create`, `ask`, `chat` | Ask form |
 | GET /tasks/ | `task list` | Tasks view + status filter |
 | GET /tasks/{id} | `task show` | Task detail |
-| GET /tasks/{id}/stream | `task watch`, `ask`/`chat` | EventSource live output |
+| GET /tasks/{id}/stream | `task watch`, `ask`/`chat` | fetch-SSE live output |
 | POST /tasks/{id}/cancel | `task cancel` | — (button pending) |
 | POST·GET·GET·DELETE /sessions | `session add/list/show/remove` | Sessions view |
 | GET /models/·/models/{id} | `model list/show` | Models view |
@@ -72,11 +72,28 @@ pytest tests/eval          # runs evalsets/*.yaml cases
 | OpenAI | ✅ mocked transport | ❌ no credentials |
 | EVENT | ✅ `FakeEventClient` | ❌ no service; execute-only auth is an EVENT 1.4.0 dependency |
 
+## SPA deployment and authentication
+
+The SPA at `/` is served by the service itself — same-origin, no build tools, REST-only
+data access. Deployment notes:
+
+- **Bearer auth**: on deployments with REST auth enabled, set the token via the
+  **API token** header button (or the first 401 will prompt for it). The token is kept in
+  `sessionStorage` — tab-scoped, never written to localStorage, never placed in URLs.
+- **Streaming**: `GET /tasks/{id}/stream` is consumed through a fetch-based SSE reader
+  (native `EventSource` cannot send `Authorization` headers); disconnects reconcile to a
+  final REST snapshot.
+- **CSRF**: bearer tokens are not ambient credentials — browsers do not attach them
+  automatically, so cross-site request forgery does not apply to authenticated requests.
+  All SPA calls are same-origin `fetch` with explicit headers.
+- **Loopback default**: binding to `127.0.0.1` with auth disabled remains the default
+  posture; non-loopback binds require REST auth (enforced at startup).
+
 ## Known limitations
 
 - Causation-depth bound covers THINK-owned ancestors only (cross-service chains invisible to THINK).
 - Thinking-model `<think>` blocks are stripped from output but still cost model tokens.
-- SPA `EventSource` cannot send `Authorization` headers (fine on the loopback default).
+- The SPA is a same-origin single file: it assumes the service is served from the same origin and cannot be pointed elsewhere (cross-origin embedding is unsupported and would need CORS decisions).
 - EVENT execute-only authorization is enforced by policy on THINK's side; EVENT 1.4.0
   lacks scoped principals (documented external dependency).
 

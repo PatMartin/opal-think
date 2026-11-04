@@ -36,6 +36,7 @@
   <h1>OPAL Think</h1>
   <span id="health-banner" class="muted">health: …</span>
   <span class="muted" id="api-version"></span>
+  <button class="small" id="token-btn" title="Bearer token for authenticated deployments (kept in this tab only)">API token</button>
 </header>
 <nav>
   <button data-view="ask" class="active">Ask</button>
@@ -62,6 +63,7 @@
       <button class="small" id="task-refresh">Refresh</button></h2>
     <table id="tasks-table"><thead><tr><th>ID</th><th>Status</th><th>Model</th><th>Prompt</th><th>Finished</th></tr></thead><tbody></tbody></table>
     <div id="task-detail" class="panel hidden"></div>
+    <p id="tasks-more" class="muted"></p>
   </section>
   <section id="view-sessions" class="panel hidden">
     <h2>Sessions <button class="small" id="session-new">New session</button></h2>
@@ -73,6 +75,7 @@
     <h2>Models</h2>
     <p class="muted">Discovered from configured providers. Use the opaque ID in task <code>model_id</code>.</p>
     <table id="models-table"><thead><tr><th>ID</th><th>Provider</th><th>Available</th><th>Ctx</th><th>Capabilities</th><th>Description</th></tr></thead><tbody></tbody></table>
+    <div id="model-detail" class="panel hidden"></div>
   </section>
   <section id="view-settings" class="panel hidden">
     <h2>Settings</h2>
@@ -107,8 +110,32 @@ const mutedRow = (cols, text) => {
   return el("tr", {}, cell);
 };
 
-async function api(path, opts = {}) {
-  const res = await fetch(path, { headers: { "Accept": "application/json", "Content-Type": "application/json", ...(opts.headers || {}) }, ...opts });
+// Bearer auth: the token lives in sessionStorage (tab-scoped — never in URLs or
+// localStorage); set via the "API token" button on authenticated deployments.
+const authToken = () => sessionStorage.getItem("opal_token");
+const authHeaders = () => authToken() ? { "Authorization": `Bearer ${authToken()}` } : {};
+
+$("#token-btn").addEventListener("click", () => {
+  const current = authToken();
+  const next = prompt(current ? "Replace or clear the API token (empty = clear):" : "API token (stored for this tab only):", current ? "keep" : "");
+  if (next === null || next === "keep") return;
+  if (next.trim() === "") sessionStorage.removeItem("opal_token");
+  else sessionStorage.setItem("opal_token", next.trim());
+  refreshHealth();
+});
+
+async function api(path, opts = {}, retried = false) {
+  const res = await fetch(path, {
+    headers: { "Accept": "application/json", "Content-Type": "application/json", ...authHeaders(), ...(opts.headers || {}) },
+    ...opts,
+  });
+  if (res.status === 401 && !retried) {
+    const token = prompt("Authentication required - API token:");
+    if (token && token.trim()) {
+      sessionStorage.setItem("opal_token", token.trim());
+      return api(path, opts, true);
+    }
+  }
   const etag = res.headers.get("ETag");
   let body = null;
   try { body = await res.json(); } catch (_) { /* 204/empty */ }
@@ -191,11 +218,13 @@ async function resetSetting(key) {
 }
 
 // ---- sessions ----
-async function loadSessions() {
+let sessionsCursor = null;
+
+async function loadSessions(append = false) {
   try {
-    const { body } = await api("/api/v1/sessions/");
+    const { body } = await api(`/api/v1/sessions/${append && sessionsCursor ? `?cursor=${encodeURIComponent(sessionsCursor)}` : ""}`);
     const tbody = $("#sessions-table tbody");
-    tbody.innerHTML = "";
+    if (!append) tbody.innerHTML = "";
     for (const s of body.items) {
       const tr = el("tr", {},
         td(code(s.id)), td(s.title ?? muted("—")),
@@ -206,8 +235,16 @@ async function loadSessions() {
       tr.lastElementChild.appendChild(del);
       tbody.appendChild(tr);
     }
-    if (!body.items.length) tbody.appendChild(mutedRow(5, "No sessions."));
-    $("#sessions-more").textContent = body.has_more ? "More sessions exist (pagination via CLI/REST)." : "";
+    sessionsCursor = body.next_cursor;
+    if (!body.items.length && !append) tbody.appendChild(mutedRow(5, "No sessions."));
+    const more = $("#sessions-more");
+    more.replaceChildren();
+    if (body.has_more) {
+      const btn = document.createElement("button");
+      btn.className = "small"; btn.textContent = "Load more";
+      btn.onclick = () => loadSessions(true);
+      more.appendChild(btn);
+    }
   } catch (e) { toast(`sessions: ${e.message}`); }
 }
 
@@ -217,6 +254,7 @@ $("#session-new").addEventListener("click", async () => {
     const { body } = await api("/api/v1/sessions/", { method: "POST", body: JSON.stringify(title ? { title } : {}) });
     toast(`created ${body.id}`, false);
     loadSessions();
+    loadAsk();  // refresh the Ask session picker
   } catch (e) { toast(`sessions: ${e.message}`); }
 });
 
@@ -241,6 +279,19 @@ async function loadModels() {
       const tr = el("tr", {},
         td(code(m.id)), tdText(m.provider), td(m.available ? pill("yes", "set") : pill("no")),
         tdText(m.context_window), tdText(caps, "muted"), tdText(m.description, "muted"));
+      tr.style.cursor = "pointer";
+      tr.onclick = async () => {
+        const detail = $("#model-detail");
+        detail.classList.remove("hidden");
+        try {
+          const { body: full } = await api(`/api/v1/models/${encodeURIComponent(m.id)}`);
+          detail.replaceChildren(
+            el("p", {}, code(full.id), " ", pill(full.available ? "available" : "unavailable", full.available ? "set" : "")),
+            el("p", { class: "muted", text: `provider ${full.provider} · context ${full.context_window ?? "unknown"}` }),
+            el("p", { class: "muted", text: `capabilities: ${Object.entries(full.capabilities).filter(([, v]) => v).map(([k]) => k).join(", ") || "none"}` }),
+            el("p", { text: full.description ?? "" }));
+        } catch (e) { detail.replaceChildren(muted(`model detail: ${e.message}`)); }
+      };
       tbody.appendChild(tr);
     }
     if (!body.length) tbody.appendChild(mutedRow(6, "No models discovered — all configured providers unreachable or disabled."));
@@ -254,14 +305,18 @@ const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out"]);
 
 async function loadAsk() {
   const modelSel = $("#ask-model"), sessSel = $("#ask-session");
-  if (modelSel.options.length > 1) return;
   try {
     const { body: models } = await api("/api/v1/models/");
-    for (const m of models.filter((m) => m.available)) modelSel.add(new Option(m.id, m.id));
+    if (modelSel.options.length <= 1) {
+      for (const m of models.filter((m) => m.available)) modelSel.add(new Option(m.id, m.id));
+    }
   } catch (_) { /* providers may be down */ }
   try {
     const { body: sessions } = await api("/api/v1/sessions/");
+    const current = sessSel.value;
+    sessSel.replaceChildren(new Option("no session", ""));
     for (const s of sessions.items) sessSel.add(new Option(s.title || s.id, s.id));
+    sessSel.value = current;
   } catch (_) { /* ignore */ }
 }
 
@@ -279,22 +334,67 @@ $("#ask-submit").addEventListener("click", async () => {
   } catch (e) { toast(`task: ${e.message}`); }
 });
 
+// Fetch-based SSE reader: native EventSource cannot attach Authorization headers.
+// Parses event:/data: frames; any disconnect or terminal frame ends with a final
+// REST snapshot, so disconnects degrade gracefully instead of hanging.
 function watchTask(id, el) {
-  const src = new EventSource(`/api/v1/tasks/${encodeURIComponent(id)}/stream`);
+  const controller = new AbortController();
   let streamed = "";
+  let done = false;
   const finish = async () => {
-    src.close();
+    if (done) return;
+    done = true;
+    controller.abort();
     try { renderTask(el, (await api(`/api/v1/tasks/${encodeURIComponent(id)}`)).body); }
     catch (_) { /* final snapshot best-effort */ }
   };
-  src.addEventListener("task.output", (e) => {
-    streamed += JSON.parse(e.data).data.text || "";
-    renderTask(el, { id, status: "running", model_id: "…", steps_completed: "…", steps: [], answer: streamed, error: null });
-  });
-  for (const t of ["task.completed", "task.failed", "task.cancelled", "task.timed_out"]) {
-    src.addEventListener(t, finish);
+  (async () => {
+    try {
+      const res = await fetch(`/api/v1/tasks/${encodeURIComponent(id)}/stream`, { headers: { "Accept": "text/event-stream", ...authHeaders() }, signal: controller.signal });
+      if (!res.ok || !res.body) { finish(); return; }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "", eventName = "", dataLines = [];
+      const dispatch = () => {
+        const payload = dataLines.join("\n");
+        dataLines = [];
+        if (!payload) return;
+        let frame = null;
+        try { frame = JSON.parse(payload); } catch (_) { return; }
+        if (eventName === "task.output") {
+          streamed += frame.data?.text || "";
+          renderTask(el, { id, status: "running", model_id: "…", steps_completed: "…", steps: [], answer: streamed, error: null });
+        } else if (frame.type && frame.type.replace("task.", "") !== "progress") {
+          finish();
+        }
+      };
+      for (;;) {
+        const { value, done: streamDone } = await reader.read();
+        if (streamDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, idx).replace(/\r$/, "");
+          buffer = buffer.slice(idx + 1);
+          if (line === "") { dispatch(); eventName = ""; }
+          else if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+        }
+      }
+    } catch (_) { /* abort/network: fall through to final snapshot */ }
+    finish();
+  })();
+  return controller;
+}
+
+async function cancelTask(id) {
+  try {
+    await api(`/api/v1/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST", body: "{}" });
+    toast(`cancel requested for ${id}`, false);
+  } catch (e) {
+    if (e.status === 409) toast(`${id} already finished`);
+    else toast(`cancel: ${e.message}`);
   }
-  src.onerror = finish;  // disconnects and terminal races both end at the final snapshot
 }
 
 function renderTask(el, t) {
@@ -302,6 +402,12 @@ function renderTask(el, t) {
     code(t.id), " ",
     pill(t.status, t.status === "completed" ? "set" : ""), " ",
     muted(`model ${t.model_id} · ${t.steps_completed} steps`));
+  if (t.status && !TERMINAL.has(t.status)) {
+    const cancel = document.createElement("button");
+    cancel.className = "small"; cancel.textContent = "Cancel"; cancel.style.marginLeft = ".6rem";
+    cancel.onclick = () => cancelTask(t.id);
+    header.appendChild(cancel);
+  }
   const nodes = [header];
   if (t.answer) nodes.push(el("p", { text: t.answer }));
   if (t.error) nodes.push(el("p", { text: `${t.error.code}: ${t.error.message}`, style: "color:var(--err)" }));
@@ -313,12 +419,15 @@ function renderTask(el, t) {
   el.replaceChildren(...nodes);
 }
 
-async function loadTasks() {
+let tasksCursor = null;
+
+async function loadTasks(append = false) {
   const status = $("#task-filter").value;
   const tbody = $("#tasks-table tbody");
+  const params = [status ? `status=${status}` : "", append && tasksCursor ? `cursor=${encodeURIComponent(tasksCursor)}` : ""].filter(Boolean).join("&");
   try {
-    const { body } = await api(`/api/v1/tasks/${status ? `?status=${status}` : ""}`);
-    tbody.replaceChildren();
+    const { body } = await api(`/api/v1/tasks/${params ? `?${params}` : ""}`);
+    if (!append) tbody.replaceChildren();
     for (const t of body.items) {
       const tr = el("tr", {},
         td(code(t.id)), tdText(t.status), tdText(t.model_id, "muted"),
@@ -332,8 +441,17 @@ async function loadTasks() {
       };
       tbody.appendChild(tr);
     }
-    if (!body.items.length) tbody.appendChild(mutedRow(5, "No tasks."));
-  } catch (e) { tbody.replaceChildren(mutedRow(5, e.message)); }
+    tasksCursor = body.next_cursor;
+    if (!body.items.length && !append) tbody.appendChild(mutedRow(5, "No tasks."));
+    const more = $("#tasks-more");
+    more.replaceChildren();
+    if (body.has_more) {
+      const btn = document.createElement("button");
+      btn.className = "small"; btn.textContent = "Load more";
+      btn.onclick = () => loadTasks(true);
+      more.appendChild(btn);
+    }
+  } catch (e) { if (!append) tbody.replaceChildren(mutedRow(5, e.message)); }
 }
 
 $("#task-refresh").addEventListener("click", loadTasks);

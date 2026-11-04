@@ -64,3 +64,21 @@ def test_spa_has_no_literal_sink_for_payloads(payload: str) -> None:
     html = _html()
     assert f"<td>{payload}</td>" not in html  # template would be exploitable if literal
     assert f"innerHTML += `{payload}" not in html
+
+
+def test_authenticated_streaming_without_eventsource() -> None:
+    """Native EventSource cannot attach Authorization — the SPA must use the
+    fetch-based reader, and tokens must never appear in URLs or localStorage."""
+    script = _html().split("<script>", 1)[1]
+    assert "new EventSource(" not in script
+    assert "text/event-stream" in script and "getReader()" in script  # fetch SSE reader present
+    assert "Authorization" in script  # attached to REST + stream requests
+    assert "localStorage.getItem" not in script and "localStorage.setItem" not in script
+    assert "sessionStorage" in script  # tab-scoped token storage
+    assert "access_token" not in script and "token=" not in script  # no URL query tokens
+
+
+def test_task_lifecycle_controls_present() -> None:
+    script = _html().split("<script>", 1)[1]
+    assert "/cancel" in script  # task cancellation affordance
+    assert "next_cursor" in script and "cursor=" in script  # pagination wired
