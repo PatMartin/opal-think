@@ -138,8 +138,12 @@ class ThinkStore:
         return row["n"] > 0
 
     def delete_session(self, session_id: str) -> None:
-        """Remove the session and all retained linked task records (irreversible)."""
+        """Remove the session, its task records, and their idempotency keys (irreversible)."""
         with self._lock, self._connect() as conn:
+            conn.execute(
+                "DELETE FROM idempotency WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
+                (session_id,),
+            )
             conn.execute("DELETE FROM tasks WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
@@ -177,6 +181,7 @@ class ThinkStore:
         columns = ",".join(row)
         placeholders = ",".join("?" for _ in row)
         conn.execute(f"INSERT INTO tasks ({columns}) VALUES ({placeholders})", [self._encode(v) for v in row.values()])
+        self.touch_session(conn, row.get("session_id"))
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -196,6 +201,12 @@ class ThinkStore:
             )
             return cursor.rowcount > 0
 
+    @staticmethod
+    def touch_session(conn: sqlite3.Connection, session_id: str | None) -> None:
+        """Bump session.updated_at — ordering and retention reflect recent use."""
+        if session_id:
+            conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (_now(), session_id))
+
     def update_task(self, task_id: str, **fields: Any) -> None:
         if not fields:
             return
@@ -205,6 +216,12 @@ class ThinkStore:
                 f"UPDATE tasks SET {assignments} WHERE id = ?",
                 [self._encode(v) for v in fields.values()] + [task_id],
             )
+            if "finished_at" in fields:
+                # terminal transition counts as session activity
+                conn.execute(
+                    "UPDATE sessions SET updated_at = ? WHERE id = (SELECT session_id FROM tasks WHERE id = ?)",
+                    (fields["finished_at"], task_id),
+                )
 
     def append_task_step(self, task_id: str, step: dict[str, Any]) -> dict[str, Any]:
         """Append a bounded step summary (auto-indexed) and bump steps_completed."""
@@ -287,6 +304,8 @@ class ThinkStore:
                 " (SELECT DISTINCT session_id FROM tasks WHERE status IN (?, ?))",
                 (session_cutoff, *ACTIVE_TASK_STATUSES),
             ).rowcount
+            # no orphan keys: idempotency entries die with their task records
+            conn.execute("DELETE FROM idempotency WHERE task_id NOT IN (SELECT id FROM tasks)")
         return tasks_removed, sessions_removed
 
     def fail_active_tasks(self, error: dict[str, Any]) -> int:

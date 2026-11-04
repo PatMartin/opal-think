@@ -191,10 +191,16 @@ class TaskEngine:
                 existing = self._store.lookup_idempotency(conn, idempotency_key)
                 if existing:
                     if existing["body_hash"] == body_hash:
-                        return self._store.get_task(existing["task_id"]), True
-                    raise OpalHTTPException(
-                        409, "conflict", "Idempotency-Key was already used with a different task body"
-                    )
+                        replay = self._store.get_task_conn(conn, existing["task_id"])
+                        if replay is not None:
+                            return replay, True
+                        # task record expired/deleted — the key's guarantee lapsed with
+                        # it; drop the stale entry and treat as a fresh admission
+                        conn.execute("DELETE FROM idempotency WHERE key = ?", (idempotency_key,))
+                    else:
+                        raise OpalHTTPException(
+                            409, "conflict", "Idempotency-Key was already used with a different task body"
+                        )
             if body.session_id and self._store.session_busy(conn, body.session_id):
                 raise OpalHTTPException(
                     409, "conflict", "session has a queued or running task; wait or cancel it first"
