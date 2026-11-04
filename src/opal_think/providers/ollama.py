@@ -115,3 +115,17 @@ class OllamaAdapter:
                             yield delta
         except httpx.HTTPError as exc:
             raise ProviderUnavailable(f"ollama stream failed: {exc}") from exc
+
+    def tool_call_message(self, generation: Generation, calls: list[ToolCallRequest]) -> dict[str, Any]:
+        """Ollama-style assistant turn carrying function calls."""
+        return {
+            "role": "assistant",
+            "content": generation.text or "",
+            "tool_calls": [
+                {"type": "function", "function": {"name": c.action_id, "arguments": c.event}}
+                for c in calls
+            ],
+        }
+
+    def tool_result_message(self, call: ToolCallRequest, content: str) -> dict[str, Any]:
+        return {"role": "tool", "name": call.action_id, "content": content}

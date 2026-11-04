@@ -137,3 +137,95 @@ def test_tools_passed_to_model(task_client: TestClient) -> None:
     _script_task(task_client, [Generation("plain answer")], event)
     tools = _fake(task_client).calls[-1].get("tools")
     assert tools and tools[0]["function"]["name"] == "gpu_diagnostics"
+
+
+def test_multiple_tool_calls_all_replied(task_client: TestClient) -> None:
+    event = FakeEventClient()
+    task = _script_task(
+        task_client,
+        [
+            Generation(
+                "",
+                tool_calls=[
+                    ToolCallRequest("gpu_diagnostics", {"topic": "a", "data": {}}),
+                    ToolCallRequest("gpu_diagnostics", {"topic": "b", "data": {}}),
+                ],
+            ),
+            Generation("ran both"),
+        ],
+        event,
+    )
+    assert task["status"] == "completed"
+    assert len(event.calls) == 2
+    action_steps = [s for s in task["steps"] if s["kind"] == "action"]
+    assert len(action_steps) == 2 and all(s["status"] == "succeeded" for s in action_steps)
+    # round-2 conversation: assistant turn carrying tool_calls + matching result per call
+    round2 = _fake(task_client).calls[-1]["messages"]
+    assistant_tool_msg = next(m for m in round2 if m["role"] == "assistant" and m.get("tool_calls"))
+    assert len(assistant_tool_msg["tool_calls"]) == 2
+    tool_msgs = [m for m in round2 if m["role"] == "tool"]
+    assert len(tool_msgs) == 2 and all(m["name"] == "gpu_diagnostics" for m in tool_msgs)
+
+
+def test_over_limit_calls_get_explicit_errors(task_client: TestClient) -> None:
+    event = FakeEventClient()
+    task = _script_task(
+        task_client,
+        [
+            Generation(
+                "",
+                tool_calls=[ToolCallRequest("gpu_diagnostics", {"topic": str(i), "data": {}}) for i in range(6)],
+            ),
+            Generation("bounded"),
+        ],
+        event,
+    )
+    assert task["status"] == "completed"
+    assert len(event.calls) == 4  # only the bounded four were submitted
+    action_steps = [s for s in task["steps"] if s["kind"] == "action"]
+    assert sum(1 for s in action_steps if s["status"] == "succeeded") == 4
+    assert sum(1 for s in action_steps if s["status"] == "failed") == 2
+    round2 = _fake(task_client).calls[-1]["messages"]
+    tool_msgs = [m for m in round2 if m["role"] == "tool"]
+    # every call got a reply message — no orphan tool messages
+    assert len(tool_msgs) == 6
+    assert sum("action_request_limit_exceeded" in m["content"] for m in tool_msgs) == 2
+
+
+def test_malformed_tool_args_fail_cleanly(task_client: TestClient) -> None:
+    event = FakeEventClient()
+    task = _script_task(
+        task_client,
+        [
+            Generation("", tool_calls=[ToolCallRequest("gpu_diagnostics", "not-a-dict")]),
+            Generation("handled bad args"),
+        ],
+        event,
+    )
+    assert task["status"] == "completed"
+    assert event.calls == []
+    action_steps = [s for s in task["steps"] if s["kind"] == "action"]
+    assert action_steps[0]["status"] == "failed" and "malformed" in action_steps[0]["summary"]
+    round2 = _fake(task_client).calls[-1]["messages"]
+    tool_msgs = [m for m in round2 if m["role"] == "tool"]
+    assert len(tool_msgs) == 1 and "malformed_tool_arguments" in tool_msgs[0]["content"]
+
+
+def test_call_ids_assigned_and_correlated(task_client: TestClient) -> None:
+    event = FakeEventClient()
+    task = _script_task(
+        task_client,
+        [
+            Generation("", tool_calls=[ToolCallRequest("gpu_diagnostics", {"topic": "t", "data": {}})]),
+            Generation("done"),
+        ],
+        event,
+    )
+    assert task["status"] == "completed"
+    round2 = _fake(task_client).calls[-1]["messages"]
+    assistant_tool_msg = next(m for m in round2 if m["role"] == "assistant" and m.get("tool_calls"))
+    tool_msgs = [m for m in round2 if m["role"] == "tool"]
+    # engine assigned a deterministic call_id; result message is a valid reply
+    call_entry = assistant_tool_msg["tool_calls"][0]["function"]
+    assert call_entry["name"] == "gpu_diagnostics"
+    assert tool_msgs[0]["name"] == "gpu_diagnostics"

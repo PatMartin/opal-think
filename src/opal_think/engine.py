@@ -37,6 +37,7 @@ _SYSTEM_PROMPT = (
     "registered OPAL-EVENT actions."
 )
 _SESSION_TURN_LIMIT = 10
+_MAX_ACTION_CALLS_PER_STEP = 4
 _TERMINAL_EVENTS = {
     "completed": "task.completed",
     "failed": "task.failed",
@@ -298,13 +299,22 @@ class TaskEngine:
             )
             if not tool_calls:
                 return text
-            messages.append({"role": "assistant", "content": generation.text or ""})
-            for call in tool_calls[:4]:  # bound: at most four action requests per reasoning step
-                outcome = await self._run_action(task_id, event_client, allowed, call, context, row)
-                result_msg: dict[str, Any] = {"role": "tool", "name": call.action_id or "tool", "content": outcome}
-                if call.call_id:
-                    result_msg["tool_call_id"] = call.call_id
-                messages.append(result_msg)
+            # Give every call a deterministic correlation id (provider-neutral) and
+            # guarantee each gets a matching tool-result message, even when rejected.
+            for index, call in enumerate(tool_calls):
+                if not call.call_id:
+                    call.call_id = f"call_{task_id[-8:]}_{step_index}_{index}"
+            messages.append(adapter.tool_call_message(generation, tool_calls))
+            for index, call in enumerate(tool_calls):
+                if index >= _MAX_ACTION_CALLS_PER_STEP:
+                    outcome = json.dumps({"status": "error", "error": "action_request_limit_exceeded"})
+                    self._action_step(
+                        task_id, call.action_id or "unknown", None, None, "failed",
+                        f"action request dropped: exceeds {_MAX_ACTION_CALLS_PER_STEP} per step",
+                    )
+                else:
+                    outcome = await self._run_action(task_id, event_client, allowed, call, context, row)
+                messages.append(adapter.tool_result_message(call, outcome))
         raise OpalHTTPException(503, "step_limit", f"task exhausted max_steps={row['max_steps']} without an answer")
 
     @staticmethod
@@ -334,7 +344,10 @@ class TaskEngine:
         if action_id not in allowed:
             self._action_step(task_id, action_id, None, None, "failed", "action unknown or disabled")
             return json.dumps({"status": "error", "error": "unknown_or_disabled_action"})
-        args = call.event or {}
+        args = call.event
+        if not isinstance(args, dict):
+            self._action_step(task_id, action_id, None, None, "failed", "malformed tool arguments")
+            return json.dumps({"status": "error", "error": "malformed_tool_arguments"})
         event = {
             "topic": args.get("topic") if isinstance(args.get("topic"), str) else "task.action",
             "data": args.get("data") if isinstance(args.get("data"), dict) else args,

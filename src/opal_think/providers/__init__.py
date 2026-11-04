@@ -93,3 +93,15 @@ class ProviderAdapter(Protocol):
         Used only for models that report ``capabilities.streaming``; callers must treat
         stream interruptions as recoverable only via the final Task snapshot."""
         ...
+
+    def tool_call_message(self, generation: Generation, calls: list[ToolCallRequest]) -> dict[str, Any]:
+        """Provider-native assistant message carrying the requested tool calls.
+
+        Keeps vendor wire shape out of the task engine (OpenAI ``tool_calls`` entries
+        with ids vs Ollama-style function calls)."""
+        ...
+
+    def tool_result_message(self, call: ToolCallRequest, content: str) -> dict[str, Any]:
+        """Provider-native tool-result message matching ``call`` (``tool_call_id`` for
+        OpenAI, ``name``+``content`` for Ollama-style)."""
+        ...

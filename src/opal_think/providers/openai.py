@@ -127,6 +127,25 @@ class OpenAIAdapter:
             raise ProviderUnavailable(f"openai chat failed: {exc}") from exc
 
 
+    def tool_call_message(self, generation: Generation, calls: list[ToolCallRequest]) -> dict[str, Any]:
+        """OpenAI assistant turn: tool_calls entries with ids and JSON-string arguments."""
+        return {
+            "role": "assistant",
+            "content": generation.text or None,
+            "tool_calls": [
+                {
+                    "id": c.call_id,
+                    "type": "function",
+                    "function": {"name": c.action_id, "arguments": json.dumps(c.event)},
+                }
+                for c in calls
+            ],
+        }
+
+    def tool_result_message(self, call: ToolCallRequest, content: str) -> dict[str, Any]:
+        return {"role": "tool", "tool_call_id": call.call_id, "content": content}
+
+
 def _parse_args(raw: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(raw) if isinstance(raw, str) else raw

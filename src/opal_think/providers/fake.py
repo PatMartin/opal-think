@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from opal_think.providers import DiscoveredModel, Generation, ProviderUnavailable
+from opal_think.providers import DiscoveredModel, Generation, ProviderUnavailable, ToolCallRequest
 
 _FAKE_MODELS = (
     DiscoveredModel(
@@ -78,3 +78,17 @@ class FakeAdapter:
         words = result.text.split(" ")
         for i, word in enumerate(words):
             yield word + (" " if i < len(words) - 1 else "")
+
+    def tool_call_message(self, generation: Generation, calls: list[ToolCallRequest]) -> dict[str, Any]:
+        """Normalized assistant turn carrying the requested tool calls."""
+        return {
+            "role": "assistant",
+            "content": generation.text or "",
+            "tool_calls": [
+                {"type": "function", "function": {"name": c.action_id, "arguments": c.event}}
+                for c in calls
+            ],
+        }
+
+    def tool_result_message(self, call: ToolCallRequest, content: str) -> dict[str, Any]:
+        return {"role": "tool", "name": call.action_id, "content": content}
