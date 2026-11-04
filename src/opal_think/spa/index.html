@@ -86,6 +86,27 @@
 const $ = (sel) => document.querySelector(sel);
 const toast = (msg, isErr = true) => { const t = $("#toast"); t.textContent = msg; t.style.borderColor = isErr ? "var(--err)" : "var(--ok)"; t.style.color = isErr ? "var(--err)" : "var(--ok)"; t.style.display = "block"; setTimeout(() => t.style.display = "none", 4000); };
 
+// Untrusted API/model/user values only ever reach the DOM via textContent or
+// safe attributes — never innerHTML interpolation (see tests/contract/test_spa.py).
+function el(tag, opts = {}, ...children) {
+  const node = document.createElement(tag);
+  if (opts.class) node.className = opts.class;
+  if (opts.text != null) node.textContent = String(opts.text);
+  if (opts.style) node.style.cssText = opts.style;
+  node.append(...children);
+  return node;
+}
+const pill = (text, cls = "") => el("span", { class: `pill ${cls}`.trim(), text });
+const code = (text) => el("code", { text });
+const muted = (text) => el("span", { class: "muted", text });
+const td = (...children) => el("td", {}, ...children);
+const tdText = (text, cls) => el("td", { class: cls, text: text ?? "—" });
+const mutedRow = (cols, text) => {
+  const cell = el("td", { class: "muted", text });
+  cell.colSpan = cols;
+  return el("tr", {}, cell);
+};
+
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Accept": "application/json", "Content-Type": "application/json", ...(opts.headers || {}) }, ...opts });
   const etag = res.headers.get("ETag");
@@ -122,11 +143,11 @@ function renderSettings(data) {
   const tbody = $("#settings-table tbody");
   tbody.innerHTML = "";
   for (const item of data.items) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td><code>${item.key}</code></td>
-      <td>${JSON.stringify(item.value)} ${item.is_default ? '<span class="pill">default</span>' : '<span class="pill set">set</span>'}${item.pending_restart ? ' <span class="pill">restart pending</span>' : ""}</td>
-      <td class="muted">${JSON.stringify(item.default)}</td>
-      <td></td>`;
+    const valueCell = td(el("span", { text: JSON.stringify(item.value) }), " ",
+      item.is_default ? pill("default") : pill("set", "set"));
+    if (item.pending_restart) valueCell.append(" ", pill("restart pending"));
+    const tr = el("tr", {},
+      td(code(item.key)), valueCell, tdText(JSON.stringify(item.default), "muted"), td());
     const actions = tr.lastElementChild;
     const edit = document.createElement("button");
     edit.className = "small"; edit.textContent = "Edit";
@@ -176,16 +197,16 @@ async function loadSessions() {
     const tbody = $("#sessions-table tbody");
     tbody.innerHTML = "";
     for (const s of body.items) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td><code>${s.id}</code></td><td>${s.title ?? '<span class="muted">—</span>'}</td>
-        <td>${s.task_count}</td><td class="muted">${s.updated_at}</td><td></td>`;
+      const tr = el("tr", {},
+        td(code(s.id)), td(s.title ?? muted("—")),
+        tdText(s.task_count), tdText(s.updated_at, "muted"), td());
       const del = document.createElement("button");
       del.className = "small"; del.textContent = "Remove";
       del.onclick = () => removeSession(s.id);
       tr.lastElementChild.appendChild(del);
       tbody.appendChild(tr);
     }
-    if (!body.items.length) tbody.innerHTML = '<tr><td colspan="5" class="muted">No sessions.</td></tr>';
+    if (!body.items.length) tbody.appendChild(mutedRow(5, "No sessions."));
     $("#sessions-more").textContent = body.has_more ? "More sessions exist (pagination via CLI/REST)." : "";
   } catch (e) { toast(`sessions: ${e.message}`); }
 }
@@ -211,21 +232,20 @@ async function removeSession(id) {
 // ---- models ----
 async function loadModels() {
   const tbody = $("#models-table tbody");
-  tbody.innerHTML = '<tr><td colspan="6" class="muted">Loading…</td></tr>';
+  tbody.replaceChildren(mutedRow(6, "Loading…"));
   try {
     const { body } = await api("/api/v1/models/");
-    tbody.innerHTML = "";
+    tbody.replaceChildren();
     for (const m of body) {
       const caps = Object.entries(m.capabilities).filter(([, v]) => v).map(([k]) => k).join(", ");
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td><code>${m.id}</code></td><td>${m.provider}</td>
-        <td>${m.available ? '<span class="pill set">yes</span>' : '<span class="pill">no</span>'}</td>
-        <td>${m.context_window ?? "—"}</td><td class="muted">${caps}</td><td class="muted">${m.description ?? "—"}</td>`;
+      const tr = el("tr", {},
+        td(code(m.id)), tdText(m.provider), td(m.available ? pill("yes", "set") : pill("no")),
+        tdText(m.context_window), tdText(caps, "muted"), tdText(m.description, "muted"));
       tbody.appendChild(tr);
     }
-    if (!body.length) tbody.innerHTML = '<tr><td colspan="6" class="muted">No models discovered — all configured providers unreachable or disabled.</td></tr>';
+    if (!body.length) tbody.appendChild(mutedRow(6, "No models discovered — all configured providers unreachable or disabled."));
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="6" class="muted">Model catalog unavailable: ${e.message}</td></tr>`;
+    tbody.replaceChildren(mutedRow(6, `Model catalog unavailable: ${e.message}`));
   }
 }
 
@@ -278,12 +298,19 @@ function watchTask(id, el) {
 }
 
 function renderTask(el, t) {
-  const steps = (t.steps || []).map((s) => `<li><span class="pill">${s.kind}</span> ${s.summary} <span class="muted">(${s.status})</span></li>`).join("");
-  el.innerHTML = `<p><code>${t.id}</code> <span class="pill ${t.status === "completed" ? "set" : ""}">${t.status}</span>
-    <span class="muted">model ${t.model_id} · ${t.steps_completed} steps</span></p>
-    ${t.answer ? `<p>${t.answer}</p>` : ""}
-    ${t.error ? `<p style="color:var(--err)">${t.error.code}: ${t.error.message}</p>` : ""}
-    ${steps ? `<ul>${steps}</ul>` : ""}`;
+  const header = el("p", {},
+    code(t.id), " ",
+    pill(t.status, t.status === "completed" ? "set" : ""), " ",
+    muted(`model ${t.model_id} · ${t.steps_completed} steps`));
+  const nodes = [header];
+  if (t.answer) nodes.push(el("p", { text: t.answer }));
+  if (t.error) nodes.push(el("p", { text: `${t.error.code}: ${t.error.message}`, style: "color:var(--err)" }));
+  if ((t.steps || []).length) {
+    nodes.push(el("ul", {},
+      ...(t.steps || []).map((s) =>
+        el("li", {}, pill(s.kind), " ", el("span", { text: s.summary }), " ", muted(`(${s.status})`)))));
+  }
+  el.replaceChildren(...nodes);
 }
 
 async function loadTasks() {
@@ -291,11 +318,11 @@ async function loadTasks() {
   const tbody = $("#tasks-table tbody");
   try {
     const { body } = await api(`/api/v1/tasks/${status ? `?status=${status}` : ""}`);
-    tbody.innerHTML = "";
+    tbody.replaceChildren();
     for (const t of body.items) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td><code>${t.id}</code></td><td>${t.status}</td><td class="muted">${t.model_id}</td>
-        <td>${t.prompt.slice(0, 70)}</td><td class="muted">${t.finished_at ?? "—"}</td>`;
+      const tr = el("tr", {},
+        td(code(t.id)), tdText(t.status), tdText(t.model_id, "muted"),
+        tdText((t.prompt || "").slice(0, 70)), tdText(t.finished_at, "muted"));
       tr.style.cursor = "pointer";
       tr.onclick = async () => {
         const detail = $("#task-detail");
@@ -305,8 +332,8 @@ async function loadTasks() {
       };
       tbody.appendChild(tr);
     }
-    if (!body.items.length) tbody.innerHTML = '<tr><td colspan="5" class="muted">No tasks.</td></tr>';
-  } catch (e) { tbody.innerHTML = `<tr><td colspan="5" class="muted">${e.message}</td></tr>`; }
+    if (!body.items.length) tbody.appendChild(mutedRow(5, "No tasks."));
+  } catch (e) { tbody.replaceChildren(mutedRow(5, e.message)); }
 }
 
 $("#task-refresh").addEventListener("click", loadTasks);

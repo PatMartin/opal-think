@@ -5,7 +5,8 @@ unavailable figures are marked NOT RUN/UNKNOWN.
 
 | Step | Repo | SHA | Branch | Date | Tests (cmd → passed/failed/skipped) | Lint | Notes |
 |---|---|---|---|---|---|---|---|
-| 01 | opal-think | (pending) | main | 2026-11-04 | `pytest -q` → 154/0/3 (env-gated live); `pytest tests/contract/test_openapi_surface.py` → 5/0/0 | ruff PASS | CI added (lint + test 3.11/3.12 + opt-in live job); generated-vs-contract OpenAPI inventory asserted 19 ops both directions + tamper check; `scripts/verify.sh` → VERIFY PASS. CI itself NOT RUN (no remote run yet) |
+| 01 | opal-think | c22317d | main | 2026-11-04 | `pytest -q` → 154/0/3 (env-gated live); `pytest tests/contract/test_openapi_surface.py` → 5/0/0 | ruff PASS | CI added (lint + test 3.11/3.12 + opt-in live job); generated-vs-contract OpenAPI inventory asserted 19 ops both directions + tamper check; `scripts/verify.sh` → VERIFY PASS. CI itself NOT RUN (no remote run yet) |
+| 02 | opal-think | (pending) | main | 2026-11-04 | `pytest -q` → 162/0/3; `pytest tests/contract/test_spa.py` → 8/0/0 | ruff PASS | All interpolated innerHTML removed (11 sites → 2 static `""` clears); untrusted values now textContent/DOM-only; static audit test enforces it; `node --check` JS syntax PASS; SPA serves live. Browser XSS e2e NOT RUN (no browser runner) — static analysis + helper routing is the guard |
 
 ## Confidence (subjective, not statistical)
 
@@ -14,3 +15,12 @@ unavailable figures are marked NOT RUN/UNKNOWN.
   run); `uv pip install --system` semantics on CI are standard but unproven here;
   the 19-op inventory test asserts the generated contract self-consistently but can't
   catch a contract edit that also removes the code.
+
+- Step 02: **90%** — security-critical rendering refactor but statically exhaustive:
+  every `innerHTML` in the file is now a static empty clear, enforced by an audit test
+  that will fail the suite on any new interpolation; `node --check` proves the
+  rewritten script parses; 8/8 audit tests + full regression green; live GET `/` verified.
+  Residual: no browser execution (visual/interaction parity manually unchecked, and
+  `EventSource`/dynamic behavior is logic-identical but not browser-confirmed); the
+  `mutedRow` colspan helper and `replaceChildren` are new DOM paths tested only
+  structurally. Conservative for the security surface, capped by lack of browser automation.
