@@ -168,3 +168,24 @@ def test_settings_persist_across_restart(tmp_path) -> None:
         c1.put("/api/v1/settings/task.max_concurrent", json={"value": 9}, headers={"If-Match": etag})
     with TestClient(create_app(ThinkConfig(db_path=tmp_path / "t.db"))) as c2:
         assert c2.get("/api/v1/settings/task.max_concurrent").json()["value"] == 9
+
+
+def test_duplicate_collection_etag_second_write_fails(client: TestClient) -> None:
+    """Same collection ETag used twice: exactly one mutation succeeds (atomic check+write)."""
+    etag = client.get("/api/v1/settings/").headers["etag"]
+    ok = client.patch("/api/v1/settings/", json={"values": {"task.max_concurrent": 8}}, headers={"If-Match": etag})
+    assert ok.status_code == 200
+    stale = client.patch("/api/v1/settings/", json={"values": {"task.max_concurrent": 9}}, headers={"If-Match": etag})
+    assert stale.status_code == 412
+
+
+def test_invalid_patch_writes_nothing(client: TestClient) -> None:
+    """A PATCH mixing a valid and an invalid key changes nothing (atomic validation)."""
+    etag = client.get("/api/v1/settings/").headers["etag"]
+    resp = client.patch(
+        "/api/v1/settings/",
+        json={"values": {"task.max_concurrent": 8, "bogus.key": 1}},
+        headers={"If-Match": etag},
+    )
+    assert resp.status_code == 422
+    assert client.get("/api/v1/settings/task.max_concurrent").json()["is_default"] is True

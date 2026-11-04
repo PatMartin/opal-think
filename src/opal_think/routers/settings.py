@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, Path, Request, Response
 from opal_think.deps import get_settings
 from opal_think.errors import OpalHTTPException
 from opal_think.schemas import Setting, SettingsPatch, SettingsSnapshot, SettingUpdate
-from opal_think.settings_registry import SettingsRegistry
+from opal_think.settings_registry import RevisionConflict, SettingsRegistry
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 
@@ -59,24 +59,22 @@ def _get_or_404(registry: SettingsRegistry, key: str) -> dict[str, Any]:
     return item
 
 
-def _check_key_etag(request: Request, item: dict[str, Any]) -> None:
-    supplied = _require_if_match(request)
-    if supplied != f"k{item['revision']}":
-        raise OpalHTTPException(
-            412,
-            "precondition_failed",
-            "If-Match does not match the current setting revision; re-read the setting and retry",
-        )
+def _if_match_revision(request: Request, prefix: str) -> int:
+    """Parse the If-Match precondition into the expected revision integer.
 
-
-def _check_collection_etag(request: Request, registry: SettingsRegistry) -> None:
+    The comparison itself happens inside the store's write transaction — this
+    only enforces header presence and shape (428 missing, 412 malformed)."""
     supplied = _require_if_match(request)
-    if supplied != f"s{registry.store.global_revision()}":
+    if not supplied.startswith(prefix):
+        raise OpalHTTPException(412, "precondition_failed", "If-Match does not match the current settings revision")
+    try:
+        return int(supplied[len(prefix) :])
+    except ValueError as exc:
         raise OpalHTTPException(
             412,
             "precondition_failed",
             "If-Match does not match the current settings revision; re-read settings and retry",
-        )
+        ) from exc
 
 
 @router.get("/", operation_id="list_settings", summary="List settings")
@@ -93,7 +91,7 @@ def patch_settings(
     patch: SettingsPatch,
     registry: SettingsRegistry = Depends(get_settings),
 ) -> SettingsSnapshot:
-    _check_collection_etag(request, registry)
+    expected = _if_match_revision(request, "s")
     errors = [
         {"key": key, "reason": reason}
         for key, value in patch.values.items()
@@ -101,7 +99,14 @@ def patch_settings(
     ]
     if errors:
         raise OpalHTTPException(422, "invalid_settings", "one or more settings failed validation", details=errors)
-    registry.store.set_many(dict(patch.values))
+    try:
+        registry.store.set_many_checked(dict(patch.values), expect_global=expected)
+    except RevisionConflict as exc:
+        raise OpalHTTPException(
+            412,
+            "precondition_failed",
+            "If-Match does not match the current settings revision; re-read settings and retry",
+        ) from exc
     snapshot, etag = _snapshot_payload(registry)
     response.headers["ETag"] = etag
     return snapshot
@@ -126,11 +131,18 @@ def set_setting(
     key: str = SettingKey,
     registry: SettingsRegistry = Depends(get_settings),
 ) -> Setting:
-    item = _get_or_404(registry, key)
-    _check_key_etag(request, item)
+    _get_or_404(registry, key)
+    expected = _if_match_revision(request, "k")
     if (reason := registry.validate_value(key, body.value)) is not None:
         raise OpalHTTPException(422, "invalid_settings", f"invalid value for {key}: {reason}")
-    registry.store.set_many({key: body.value})
+    try:
+        registry.store.set_many_checked({key: body.value}, key=key, expect_key=expected)
+    except RevisionConflict as exc:
+        raise OpalHTTPException(
+            412,
+            "precondition_failed",
+            "If-Match does not match the current setting revision; re-read the setting and retry",
+        ) from exc
     updated = _get_or_404(registry, key)
     response.headers["ETag"] = SettingsRegistry.etag_key(updated["revision"])
     return _setting_payload(updated)
@@ -142,7 +154,14 @@ def remove_setting_override(
     key: str = SettingKey,
     registry: SettingsRegistry = Depends(get_settings),
 ) -> Response:
-    item = _get_or_404(registry, key)
-    _check_key_etag(request, item)
-    registry.store.reset(key)
+    _get_or_404(registry, key)
+    expected = _if_match_revision(request, "k")
+    try:
+        registry.store.reset_checked(key, expect_key=expected)
+    except RevisionConflict as exc:
+        raise OpalHTTPException(
+            412,
+            "precondition_failed",
+            "If-Match does not match the current setting revision; re-read the setting and retry",
+        ) from exc
     return Response(status_code=204, headers={"ETag": SettingsRegistry.etag_key(0)})

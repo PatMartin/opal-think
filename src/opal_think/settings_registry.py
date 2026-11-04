@@ -134,6 +134,15 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+class RevisionConflict(Exception):
+    """The expected revision did not match inside the write transaction (stale ETag)."""
+
+    def __init__(self, expected: int, actual: int) -> None:
+        super().__init__(f"expected revision {expected}, found {actual}")
+        self.expected = expected
+        self.actual = actual
+
+
 class SettingsStore:
     """SQLite-backed override store with a global revision and per-key revisions.
 
@@ -178,25 +187,82 @@ class SettingsStore:
         conn.execute("UPDATE meta SET value=? WHERE name='revision'", (str(revision),))
         return revision
 
-    def set_many(self, values: dict[str, Any]) -> int:
-        """Atomically write overrides; returns the new global revision."""
-        with self._lock, self._connect() as conn:
+    def _checked_write(
+        self,
+        writer: Callable[[sqlite3.Connection], int],
+        *,
+        expect_global: int | None = None,
+        key: str | None = None,
+        expect_key: int | None = None,
+    ) -> int:
+        """Check precondition revisions and mutate inside one IMMEDIATE transaction.
+
+        ``BEGIN IMMEDIATE`` serializes writers across connections: a concurrent
+        writer blocks on the SQLite busy timeout then sees the fresh revision, so
+        exactly one writer with a given ETag wins and the loser gets
+        :class:`RevisionConflict` — no lost updates."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                if expect_global is not None:
+                    actual = int(conn.execute("SELECT value FROM meta WHERE name='revision'").fetchone()[0])
+                    if actual != expect_global:
+                        raise RevisionConflict(expect_global, actual)
+                if key is not None and expect_key is not None:
+                    row = conn.execute("SELECT revision FROM settings WHERE key=?", (key,)).fetchone()
+                    actual_key = int(row[0]) if row else 0
+                    if actual_key != expect_key:
+                        raise RevisionConflict(expect_key, actual_key)
+                revision = writer(conn)
+                conn.commit()
+                return revision
+            except BaseException:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def set_many_checked(
+        self,
+        values: dict[str, Any],
+        *,
+        expect_global: int | None = None,
+        key: str | None = None,
+        expect_key: int | None = None,
+    ) -> int:
+        """Atomic precondition check + write overrides; returns the new global revision."""
+
+        def write(conn: sqlite3.Connection) -> int:
             revision = self._bump(conn)
-            for key, value in values.items():
+            for k, value in values.items():
                 conn.execute(
                     "INSERT INTO settings (key, value, revision, updated_at) VALUES (?,?,?,?) "
                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value, revision=excluded.revision, "
                     "updated_at=excluded.updated_at",
-                    (key, json.dumps(value), revision, _now()),
+                    (k, json.dumps(value), revision, _now()),
                 )
             return revision
 
-    def reset(self, key: str) -> int:
-        """Remove an override (restore default); returns the new global revision."""
-        with self._lock, self._connect() as conn:
+        return self._checked_write(write, expect_global=expect_global, key=key, expect_key=expect_key)
+
+    def reset_checked(self, key: str, *, expect_key: int | None = None) -> int:
+        """Atomic precondition check + remove override; returns the new global revision."""
+
+        def write(conn: sqlite3.Connection) -> int:
             revision = self._bump(conn)
             conn.execute("DELETE FROM settings WHERE key=?", (key,))
             return revision
+
+        return self._checked_write(write, key=key, expect_key=expect_key)
+
+    def set_many(self, values: dict[str, Any]) -> int:
+        """Atomically write overrides; returns the new global revision."""
+        return self.set_many_checked(values)
+
+    def reset(self, key: str) -> int:
+        """Remove an override (restore default); returns the new global revision."""
+        return self.reset_checked(key)
 
 
 class SettingsRegistry:
