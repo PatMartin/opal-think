@@ -34,6 +34,10 @@ class DiscoveredModel:
     vision: bool = False
     context_window: int | None = None
     description: str | None = None
+    # False when caps came from a names-only listing (ollama /api/tags, openai /v1/models):
+    # the engine may still *attempt* tools for an explicitly requested model, but default
+    # resolution prefers a verified tool-capable model.
+    capabilities_verified: bool = True
 
 
 @dataclass

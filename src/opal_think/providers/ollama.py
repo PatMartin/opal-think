@@ -37,7 +37,12 @@ class OllamaAdapter:
                 models = response.json().get("models", [])
         except httpx.HTTPError as exc:
             raise ProviderUnavailable(f"ollama discovery failed: {exc}") from exc
-        return [DiscoveredModel(name=m["name"], available=True) for m in models if m.get("name")]
+        # /api/tags is names-only: capabilities are unknown until /api/show per model.
+        return [
+            DiscoveredModel(name=m["name"], available=True, capabilities_verified=False)
+            for m in models
+            if m.get("name")
+        ]
 
     async def show_model(self, name: str) -> DiscoveredModel | None:
         try:

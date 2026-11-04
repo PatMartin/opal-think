@@ -123,12 +123,39 @@ class TaskEngine:
                 raise OpalHTTPException(422, "invalid_model", f"model is unknown or unavailable: {target}")
             return adapter, name, target, model
         pairs, failures = await self._providers.catalog()
-        available = [(adapter, m) for adapter, m in pairs if m.available]
+        available = sorted(
+            ((adapter, m) for adapter, m in pairs if m.available),
+            key=lambda pair: f"{pair[0].provider_id}:{pair[1].name}",
+        )
         if not available:
             detail = "no enabled provider is reachable" if failures else "no models are configured or enabled"
             raise OpalHTTPException(503, "unavailable", f"cannot accept task: {detail}")
-        adapter, model = min(available, key=lambda pair: f"{pair[0].provider_id}:{pair[1].name}")
+        adapter, model = self._pick_default(available)
+        # When EVENT is configured the default should be tool-capable: resolve verified
+        # capabilities for candidates until one qualifies (bounded; list entries may be
+        # names-only/unverified).
+        if self._event_client() is not None:
+            for cand_adapter, cand_model in available[:8]:
+                shown = cand_model
+                if not cand_model.capabilities_verified:
+                    try:
+                        shown = await cand_adapter.show_model(cand_model.name) or cand_model
+                    except ProviderUnavailable:
+                        continue
+                if shown.tool_calling:
+                    return cand_adapter, shown.name, f"{cand_adapter.provider_id}:{shown.name}", shown
         return adapter, model.name, f"{adapter.provider_id}:{model.name}", model
+
+    @staticmethod
+    def _pick_default(available: list[tuple[ProviderAdapter, DiscoveredModel]]) -> tuple[ProviderAdapter, DiscoveredModel]:
+        """Deterministic default: prefer Ollama local inference, else first available."""
+        ollama = [pair for pair in available if pair[0].type == "ollama"]
+        return min(ollama or available, key=lambda pair: pair[1].name)
+
+    @staticmethod
+    def _tools_allowed(discovered: DiscoveredModel) -> bool:
+        """Verified tool-capable, or unverified (attempt and surface provider errors)."""
+        return discovered.tool_calling or not discovered.capabilities_verified
 
     def causation_depth(self, causation_id: str | None) -> int:
         """Depth of the triggering chain as far as THINK can observe (THINK-owned ancestors only)."""
@@ -276,7 +303,7 @@ class TaskEngine:
         event_client = self._event_client()
         tools: list[dict[str, Any]] = []
         allowed: set[str] = set()
-        if event_client is not None and discovered.tool_calling:
+        if event_client is not None and self._tools_allowed(discovered):
             try:
                 actions = await event_client.list_actions(context)
                 allowed = {a["id"] for a in actions if a.get("enabled")}

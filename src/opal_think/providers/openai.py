@@ -51,14 +51,18 @@ class OpenAIAdapter:
             raise ProviderUnavailable(f"openai discovery failed: {exc}") from exc
         if response.status_code >= 400:
             raise ProviderUnavailable(f"openai discovery failed: HTTP {response.status_code}")
+        # /v1/models reports names only (includes embeddings/moderation models) — do not
+        # advertise tools/structured output we cannot verify; explicitly requested models
+        # still attempt the calls and surface provider errors honestly.
         return [
             DiscoveredModel(
                 name=m["id"],
                 available=True,
                 streaming=True,
-                tool_calling=True,  # chat-completions models generally support tools; refined per-model later
-                structured_output=True,
+                tool_calling=False,
+                structured_output=False,
                 vision=False,
+                capabilities_verified=False,
             )
             for m in response.json().get("data", [])
             if m.get("id")
