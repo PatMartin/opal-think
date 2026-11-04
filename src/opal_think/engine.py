@@ -212,8 +212,12 @@ class TaskEngine:
         task_id = row["id"]
         self._store.update_task(task_id, status="running", started_at=_now())
         self._emit(task_id, "task.started", {"status": "running", "model_id": row["model_id"]})
+        # One absolute deadline for the whole task: every inference call, EVENT
+        # submit/poll, and sleep consumes time from this budget (contract: timeout
+        # applies to the task, including time spent waiting on EVENT executions).
+        deadline = asyncio.get_event_loop().time() + row["timeout_seconds"]
         try:
-            answer = await self._execute(task_id, adapter, row, discovered)
+            answer = await self._execute(task_id, adapter, row, discovered, deadline)
         except _TaskCancelled:
             self._finish(task_id, "cancelled")
         except _TaskTimeout:
@@ -246,7 +250,21 @@ class TaskEngine:
         self._emit(task_id, "task.progress", {"summary": step["summary"], "step": step["index"], "kind": step["kind"]})
         return step
 
-    async def _execute(self, task_id: str, adapter: ProviderAdapter, row: dict[str, Any], discovered: DiscoveredModel) -> str:
+    def _remaining(self, task_id: str, deadline: float) -> float:
+        """Time left on the absolute task deadline; raises _TaskTimeout when exhausted."""
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            raise _TaskTimeout
+        return remaining
+
+    async def _execute(
+        self,
+        task_id: str,
+        adapter: ProviderAdapter,
+        row: dict[str, Any],
+        discovered: DiscoveredModel,
+        deadline: float,
+    ) -> str:
         """Guarded loop: reason -> validate tool calls -> EVENT execute+poll -> feed result -> repeat."""
         model_name = row["model_id"].split(":", 1)[1]
         messages = self._build_messages(row)
@@ -284,12 +302,16 @@ class TaskEngine:
                 raise _TaskCancelled
             if use_stream:
                 text = await self._with_deadline(
-                    task_id, self._collect_stream(task_id, adapter, model_name, messages), row["timeout_seconds"]
+                    task_id,
+                    self._collect_stream(task_id, adapter, model_name, messages),
+                    self._remaining(task_id, deadline),
                 )
                 tool_calls = []
             else:
                 generation = await self._with_deadline(
-                    task_id, adapter.generate(model_name, messages, tools=tools or None), row["timeout_seconds"]
+                    task_id,
+                    adapter.generate(model_name, messages, tools=tools or None),
+                    self._remaining(task_id, deadline),
                 )
                 text, tool_calls = strip_think_blocks(generation.text), generation.tool_calls
                 if text:
@@ -314,7 +336,7 @@ class TaskEngine:
                         f"action request dropped: exceeds {_MAX_ACTION_CALLS_PER_STEP} per step",
                     )
                 else:
-                    outcome = await self._run_action(task_id, event_client, allowed, call, context, row)
+                    outcome = await self._run_action(task_id, event_client, allowed, call, context, row, deadline)
                 messages.append(adapter.tool_result_message(call, outcome))
         raise OpalHTTPException(503, "step_limit", f"task exhausted max_steps={row['max_steps']} without an answer")
 
@@ -336,7 +358,7 @@ class TaskEngine:
             },
         }
 
-    async def _run_action(self, task_id, event_client, allowed, call, context, row) -> str:
+    async def _run_action(self, task_id, event_client, allowed, call, context, row, deadline) -> str:
         """Validate + submit one tool call through EVENT and poll to terminal. Returns tool-result text."""
         action_id = call.action_id or "unknown"
         if event_client is None:
@@ -354,25 +376,22 @@ class TaskEngine:
             "data": args.get("data") if isinstance(args.get("data"), dict) else args,
         }
         action_input = sanitize_action_input({"event": event})
+        # NOTE: submitting to EVENT is a real side effect. Cancelling THINK afterwards
+        # does not undo it — EVENT may keep running the execution we already admitted.
         execution = await self._with_deadline(
-            task_id, event_client.execute(action_id, event, context), row["timeout_seconds"]
+            task_id, event_client.execute(action_id, event, context), self._remaining(task_id, deadline)
         )
         execution_id = execution.get("id")
         self._emit(task_id, "task.action", {"action_id": action_id, "execution_id": execution_id, "summary": "action submitted"})
-        deadline = asyncio.get_event_loop().time() + row["timeout_seconds"]
         while True:
             if self._cancels[task_id].is_set():
                 raise _TaskCancelled
-            record = await self._with_deadline(
-                task_id, event_client.get_execution(execution_id, context), row["timeout_seconds"]
-            )
+            remaining = self._remaining(task_id, deadline)
+            record = await self._with_deadline(task_id, event_client.get_execution(execution_id, context), remaining)
             status = record.get("status", "unknown")
             if status in TERMINAL_EXECUTION_STATUSES:
                 break
-            if asyncio.get_event_loop().time() > deadline:
-                status = "timed_out"
-                break
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(min(0.5, self._remaining(task_id, deadline)))
         summary = f"action {action_id} {status}"
         self._action_step(task_id, action_id, execution_id, action_input, status, summary)
         return json.dumps(normalize_execution_result(record), default=str)
@@ -433,8 +452,11 @@ class TaskEngine:
     # -- cancellation / maintenance -------------------------------------------------------------
 
     def request_cancel(self, task_id: str) -> None:
-        """Cooperative cancellation: flag the row and wake the runner between steps."""
-        self._store.update_task(task_id, cancel_requested=1)
+        """Cooperative cancellation: flag the row and wake the runner between steps.
+
+        The runner is the single writer of terminal state; the flag is ignored if the
+        task already reached a terminal status between the router's check and here."""
+        self._store.flag_cancel(task_id)
         if event := self._cancels.get(task_id):
             event.set()
 

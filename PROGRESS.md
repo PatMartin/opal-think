@@ -34,4 +34,6 @@ unavailable figures are marked NOT RUN/UNKNOWN.
   `mutedRow` colspan helper and `replaceChildren` are new DOM paths tested only
   structurally. Conservative for the security surface, capped by lack of browser automation.
 
-| 04 | opal-think | (pending) | main | 2026-11-04 | `pytest -q` → 176/0/3; focused 10 unit + 11 contract | ruff PASS | `normalize_execution_result` maps real EVENT Execution fields (result/stdout/stderr/exit_code/http_status/error_code/error_message) into a bounded redacted tool payload; dropped/timed_out get explanatory reasons; no fabricated fields. Live EVENT NOT RUN |
+| 04 | opal-think | 8d4a2d3 | main | 2026-11-04 | `pytest -q` → 176/0/3; focused 10 unit + 11 contract | ruff PASS | `normalize_execution_result` maps real EVENT Execution fields (result/stdout/stderr/exit_code/http_status/error_code/error_message) into a bounded redacted tool payload; dropped/timed_out get explanatory reasons; no fabricated fields. Live EVENT NOT RUN |
+
+| 05 | opal-think | (pending) | main | 2026-11-04 | `pytest -q` → 180/0/3; focused 4 deadline contract | ruff PASS | One monotonic deadline from runner start consumed by every generate/EVENT submit/poll/sleep; `flag_cancel` guarded to non-terminal (single-writer); poll sleep bounded by remaining; EVENT-side-effect disclaimer documented. Live EVENT NOT RUN |

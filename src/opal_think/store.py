@@ -187,6 +187,15 @@ class ThinkStore:
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return ThinkStore._task_row(row)
 
+    def flag_cancel(self, task_id: str) -> bool:
+        """Set cancel_requested only while non-terminal (single-writer guard)."""
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE tasks SET cancel_requested = 1 WHERE id = ? AND status IN (?, ?)",
+                (task_id, *ACTIVE_TASK_STATUSES),
+            )
+            return cursor.rowcount > 0
+
     def update_task(self, task_id: str, **fields: Any) -> None:
         if not fields:
             return
