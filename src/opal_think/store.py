@@ -309,14 +309,30 @@ class ThinkStore:
         return tasks_removed, sessions_removed
 
     def fail_active_tasks(self, error: dict[str, Any]) -> int:
-        """Fail every queued/running task (used to reap orphans at startup)."""
+        """Fail every queued/running task (used to reap orphans at startup).
+
+        When a task's last action step carries an EVENT ``execution_id``, the
+        recorded error includes it as ``event_execution_id`` so an operator can
+        inspect the downstream execution. We never claim rollback or
+        cancellation of an already-admitted EVENT side effect.
+        """
         now = _now()
         with self._lock, self._connect() as conn:
-            cursor = conn.execute(
-                "UPDATE tasks SET status = 'failed', error = ?, finished_at = ? WHERE status IN (?, ?)",
-                (json.dumps(error), now, *ACTIVE_TASK_STATUSES),
-            )
-            return cursor.rowcount
+            rows = conn.execute(
+                "SELECT id, steps FROM tasks WHERE status IN (?, ?)", tuple(ACTIVE_TASK_STATUSES)
+            ).fetchall()
+            for row in rows:
+                task_error = dict(error)
+                steps = json.loads(row["steps"]) if row["steps"] else []
+                execution_ids = [s.get("execution_id") for s in steps if s.get("execution_id")]
+                if execution_ids:
+                    task_error["event_execution_id"] = execution_ids[-1]
+                    task_error["message"] += "; a downstream EVENT execution was admitted and is not rolled back"
+                conn.execute(
+                    "UPDATE tasks SET status = 'failed', error = ?, finished_at = ? WHERE id = ?",
+                    (json.dumps(task_error), now, row["id"]),
+                )
+            return len(rows)
 
     # -- admission helpers (call inside transaction()) ------------------------------------------
 
