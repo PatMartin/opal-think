@@ -14,6 +14,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -324,9 +325,13 @@ class TaskEngine:
         if event_client is not None and self._tools_allowed(discovered):
             try:
                 actions = await event_client.list_actions(context)
-                allowed = {a["id"] for a in actions if a.get("enabled")}
-                schemas = {a["id"]: a.get("input_schema") for a in actions if a.get("enabled")}
-                tools = [self._tool_spec(a) for a in actions if a.get("enabled")]
+                enabled = [a for a in actions if a.get("enabled")]
+                # `allowed`/`schemas` cover every enabled action — any registered
+                # action stays invocable by name; selection only bounds which
+                # specs are advertised to the model.
+                allowed = {a["id"] for a in enabled}
+                schemas = {a["id"]: a.get("input_schema") for a in enabled}
+                tools = self._select_tools(enabled, row["prompt"])
             except OpalHTTPException:
                 allowed, tools, schemas = set(), [], {}  # EVENT down at discovery -> model-only mode
             if tools:
@@ -390,6 +395,49 @@ class TaskEngine:
     def _safe_hint(value: Any, limit: int = 160) -> str:
         """Action metadata is untrusted discovery material: printable only, bounded."""
         return "".join(c for c in str(value) if c.isprintable() or c in " \t")[:limit].strip()
+
+    _MAX_TOOLS_OFFERED = 16
+    _MAX_TOOL_SPEC_BYTES = 8192
+
+    @staticmethod
+    def _match_tokens(action: dict) -> set[str]:
+        text = " ".join(
+            str(part)
+            for part in (
+                action.get("id"),
+                action.get("description"),
+                " ".join(action.get("keywords") or []),
+                " ".join(action.get("suggested_prompts") or []),
+            )
+            if part
+        )
+        return {tok for tok in re.split(r"[^a-z0-9]+", text.lower().replace("_", " ")) if len(tok) > 2}
+
+    @classmethod
+    def _select_tools(cls, actions: list[dict], prompt: str) -> list[dict]:
+        """Bounded lexical candidate selection over already-enabled actions.
+
+        Cheap exact/token matching only (no embeddings): scores prompt-token
+        overlap with id/description/keywords/suggested_prompts, orders by score
+        desc then id asc (stable ties), and bounds the advertised set by count
+        and serialized bytes. Actions bounded out remain invocable by name via
+        the enabled-actions system hint — selection never changes `allowed`.
+        """
+        prompt_tokens = {tok for tok in re.split(r"[^a-z0-9]+", prompt.lower()) if len(tok) > 2}
+        ranked = sorted(
+            actions,
+            key=lambda a: (-len(cls._match_tokens(a) & prompt_tokens), str(a.get("id") or "")),
+        )
+        tools: list[dict] = []
+        used = 0
+        for action in ranked:
+            spec = cls._tool_spec(action)
+            size = len(json.dumps(spec, default=str))
+            if tools and (len(tools) >= cls._MAX_TOOLS_OFFERED or used + size > cls._MAX_TOOL_SPEC_BYTES):
+                continue
+            tools.append(spec)
+            used += size
+        return tools
 
     @classmethod
     def _tool_spec(cls, action: dict[str, Any]) -> dict[str, Any]:
