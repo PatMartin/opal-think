@@ -15,10 +15,16 @@ Case YAML fields beyond the basics:
   assert the response is the same task record
 - ``live``:      opt-in real-model case; requires OPAL_THINK_LIVE_OLLAMA +
   OPAL_THINK_LIVE_MODEL, skipped otherwise and flagged in reports
+- ``event_backend``: ``mock_http_event`` routes EVENT traffic through a real
+  HttpEventClient over the released-contract fixture (httpx MockTransport —
+  in-process, no sockets or shells) instead of a method-level FakeEventClient;
+  ``event_down: true`` makes that fixture answer 503
 - ``expect.tool_result_contains``: substrings that must appear in a tool-result
   message fed back to the model (verifies normalized EVENT fields arrive)
 - ``expect.error_code``: expected task.error.code for failure cases
 - ``expect.replayed``: assert the replayed response carried the same task id
+- ``expect.event_provenance``: which fixture served EVENT (``mock_http_event``
+  or ``fake_event_client``), recorded in the case outcome
 """
 
 from __future__ import annotations
@@ -38,6 +44,7 @@ from opal_think.config import ThinkConfig
 from opal_think.errors import OpalHTTPException
 from opal_think.event_client import FakeEventClient
 from opal_think.providers import Generation, ToolCallRequest
+from tests.mock_http_event import MockEventApi
 
 TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
 
@@ -97,14 +104,20 @@ def run_case(evalset_name: str, case: dict[str, Any], tmp_path: Path) -> tuple[d
         if script:
             fake.set_script(script)
     event_client = _UnavailableEventClient() if case.get("event_unavailable") else None
-    if not live and not case.get("event_unavailable") and (
-        "actions" in case or "action_results" in case or "event_reject" in case
-    ):
-        event_client = FakeEventClient(actions=case.get("actions"))
-        for action_id, fields in (case.get("action_results") or {}).items():
-            event_client.set_result(action_id, **fields)
-        for action_id in case.get("event_reject") or []:
-            event_client.reject_ids.add(action_id)
+    event_api: MockEventApi | None = None
+    if not live and not case.get("event_unavailable"):
+        if case.get("event_backend") == "mock_http_event":
+            # EVENT reached over the real HTTP adapter boundary, not method calls.
+            event_api = MockEventApi(actions=case.get("actions"), available=not case.get("event_down"))
+            for action_id, fields in (case.get("action_results") or {}).items():
+                event_api.set_terminal(action_id, **fields)
+            event_client = event_api.client()
+        elif "actions" in case or "action_results" in case or "event_reject" in case:
+            event_client = FakeEventClient(actions=case.get("actions"))
+            for action_id, fields in (case.get("action_results") or {}).items():
+                event_client.set_result(action_id, **fields)
+            for action_id in case.get("event_reject") or []:
+                event_client.reject_ids.add(action_id)
     if event_client is not None:
         app.state.event_client = event_client
 
@@ -138,8 +151,15 @@ def run_case(evalset_name: str, case: dict[str, Any], tmp_path: Path) -> tuple[d
                 for m in call["messages"]
                 if m["role"] == "tool"
             ]
-        event_calls = getattr(app.state, "event_client", None)
-    return task, event_calls.calls if isinstance(event_client, FakeEventClient) else [], outcome
+        if event_api is not None:
+            outcome["event_provenance"] = MockEventApi.provenance
+            event_calls = event_api.calls
+        elif isinstance(app.state.event_client, FakeEventClient):
+            outcome["event_provenance"] = "fake_event_client"
+            event_calls = app.state.event_client.calls
+        else:
+            event_calls = []
+    return task, event_calls, outcome
 
 
 def _wait_terminal(client: TestClient, task_id: str, seconds: float = 15.0) -> dict[str, Any]:
@@ -170,6 +190,10 @@ def assert_case(
         assert sorted(c["action_id"] for c in event_calls) == sorted(expect["called_actions"])
     if expect.get("replayed"):
         assert outcome.get("replayed_id") == task["id"], f"{case['id']}: replay returned {outcome.get('replayed_id')}"
+    if provenance := expect.get("event_provenance"):
+        assert outcome.get("event_provenance") == provenance, (
+            f"{case['id']}: EVENT served by {outcome.get('event_provenance')!r}, expected {provenance!r}"
+        )
     for wanted_text in expect.get("tool_result_contains", []):
         assert any(
             wanted_text in (msg or "") for msg in outcome.get("tool_messages", [])

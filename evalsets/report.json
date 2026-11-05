@@ -3,12 +3,12 @@
   "environment": {
     "python": "3.13.3",
     "platform": "Windows-11-10.0.26200-SP0",
-    "git_sha": "ca9f9d496bfbff12f5edc0dff7f7b76225d7d97c",
+    "git_sha": "42cfd142e64ecd9b8a6f987fb178276deb543f00",
     "live_ran": false
   },
   "counts": {
-    "total": 14,
-    "passed": 13,
+    "total": 18,
+    "passed": 17,
     "failed": 0,
     "skipped_live": 1
   },
@@ -58,6 +58,34 @@
     {
       "evalset": "event-failures",
       "case_id": "failed-execution-feedback",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "event-http-boundary",
+      "case_id": "http-shell-stdout-result",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "event-http-boundary",
+      "case_id": "http-server-side-rejection",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "event-http-boundary",
+      "case_id": "http-failed-execution-feedback",
+      "outcome": "pass",
+      "task_status": "completed",
+      "live": false
+    },
+    {
+      "evalset": "event-http-boundary",
+      "case_id": "http-event-down-model-only",
       "outcome": "pass",
       "task_status": "completed",
       "live": false

@@ -20,6 +20,9 @@ import httpx
 from opal_think.errors import OpalHTTPException
 
 TERMINAL_EXECUTION_STATUSES = {"succeeded", "failed", "timed_out", "dropped"}
+# The remaining statuses in the released EVENT Execution enum; anything else is a
+# contract violation rather than a reason to keep polling.
+ACTIVE_EXECUTION_STATUSES = {"queued", "running"}
 _SENSITIVE_HINTS = ("password", "passwd", "secret", "token", "api_key", "apikey", "credential", "private_key")
 _MAX_ACTION_INPUT_BYTES = 4096
 _MAX_EXECUTION_FIELD_CHARS = 2000  # per stdout/stderr/error_message/result-string

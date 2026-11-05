@@ -1,0 +1,67 @@
+name: event-http-boundary
+description: >-
+  EVENT scenarios driven through the real HttpEventClient over the
+  mock_http_event fixture (released opal_event.1.4.0 surface on httpx
+  MockTransport) rather than a method-level FakeEventClient. Proves the wire
+  request shape, 202-admission -> poll sequencing, server-side rejection, and
+  that stdout/stderr/result fields reach the model's next turn. In-process
+  only: no sockets, shells, or subprocesses.
+cases:
+  - id: http-shell-stdout-result
+    prompt: "read the gpu log"
+    event_backend: mock_http_event
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
+    action_results:
+      gpu_diagnostics: {status: succeeded, exit_code: 0, stdout: "GPU0 temp=63C", stderr: "", result: {gpu_temp_c: 63}}
+    script:
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: gpu.diag, data: {}}}]
+      - text: "GPU is 63C"
+    expect:
+      status: completed
+      event_provenance: mock_http_event
+      event_calls: 1
+      called_actions: [gpu_diagnostics]
+      tool_result_contains: ["GPU0 temp=63C", "succeeded", "gpu_temp_c"]
+      steps:
+        - {kind: action, status: succeeded, action_id: gpu_diagnostics}
+  - id: http-server-side-rejection
+    prompt: "act on a malformed envelope"
+    event_backend: mock_http_event
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
+    script:
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: "Bad Topic!", data: {}}}]
+      - text: "EVENT rejected the envelope; no action ran."
+    expect:
+      status: completed
+      event_provenance: mock_http_event
+      event_calls: 0
+      tool_result_contains: ["event_rejected", "malformed"]
+      steps:
+        - {kind: action, status: failed, action_id: gpu_diagnostics}
+  - id: http-failed-execution-feedback
+    prompt: "diagnose and report"
+    event_backend: mock_http_event
+    actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
+    action_results:
+      gpu_diagnostics: {status: failed, exit_code: 1, stderr: "permission denied", error_code: shell_exit, error_message: "process exited 1"}
+    script:
+      - tool_calls: [{action_id: gpu_diagnostics, event: {topic: gpu.diag, data: {}}}]
+      - text: "The diagnostic failed with exit 1."
+    expect:
+      status: completed
+      event_provenance: mock_http_event
+      event_calls: 1
+      tool_result_contains: ["permission denied", "process exited 1", "shell_exit"]
+      steps:
+        - {kind: action, status: failed, action_id: gpu_diagnostics}
+  - id: http-event-down-model-only
+    prompt: "act while event is down"
+    event_backend: mock_http_event
+    event_down: true
+    script:
+      - text: "EVENT is unavailable; answering directly."
+    expect:
+      status: completed
+      event_provenance: mock_http_event
+      event_calls: 0
+      answer_contains: "answering directly"

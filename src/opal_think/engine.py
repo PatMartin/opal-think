@@ -21,6 +21,7 @@ import jsonschema
 
 from opal_think.errors import OpalHTTPException
 from opal_think.event_client import (
+    ACTIVE_EXECUTION_STATUSES,
     TERMINAL_EXECUTION_STATUSES,
     normalize_execution_result,
     sanitize_action_input,
@@ -461,16 +462,31 @@ class TaskEngine:
                 raise
             self._action_step(task_id, action_id, None, action_input, "failed", f"EVENT rejected request: {exc.code}")
             return json.dumps({"status": "error", "error": "event_rejected", "detail": exc.message[:500]})
-        execution_id = execution.get("id")
+        execution_id = execution.get("id") if isinstance(execution, dict) else None
+        if not execution_id:
+            # Contract violation: the 202 admission carries no execution id, so there
+            # is nothing to poll and no honest outcome to report.
+            self._action_step(
+                task_id, action_id, None, action_input, "failed", "EVENT admission record missing execution id"
+            )
+            return json.dumps({"status": "error", "error": "event_protocol_error"})
         self._emit(task_id, "task.action", {"action_id": action_id, "execution_id": execution_id, "summary": "action submitted"})
         while True:
             if self._cancels[task_id].is_set():
                 raise _TaskCancelled
             remaining = self._remaining(task_id, deadline)
             record = await self._with_deadline(task_id, event_client.get_execution(execution_id, context), remaining)
-            status = record.get("status", "unknown")
+            status = record.get("status") if isinstance(record, dict) else None
             if status in TERMINAL_EXECUTION_STATUSES:
                 break
+            if status not in ACTIVE_EXECUTION_STATUSES:
+                # Unrecognized status is an EVENT contract violation: fail the step
+                # instead of polling until the task deadline or fabricating success.
+                self._action_step(
+                    task_id, action_id, execution_id, action_input, "failed",
+                    f"EVENT returned unrecognized execution status: {status!r}",
+                )
+                return json.dumps({"status": "error", "error": "event_protocol_error"})
             await asyncio.sleep(min(0.5, self._remaining(task_id, deadline)))
         summary = f"action {action_id} {status}"
         self._action_step(task_id, action_id, execution_id, action_input, status, summary)
