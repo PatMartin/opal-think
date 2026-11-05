@@ -138,3 +138,14 @@ OPAL_THINK_LIVE_OPENAI=https://api.openai.com OPAL_THINK_LIVE_OPENAI_MODEL=gpt-4
 # OPAL_THINK_LIVE_OPENAI_KEY overrides which env var name holds the key (default OPENAI_API_KEY)
 # evidence -> OPAL_THINK_LIVE_REPORT or $TMP/opal_think_live_openai_smoke.json
 ```
+
+Live THINK↔EVENT interop is likewise opt-in — real isolated EVENT + real Ollama,
+execute-scoped credential only, read-only diagnostic actions:
+
+```bash
+export OPAL_EVENT_EXECUTE_TOKEN=exec-tok
+OPAL_THINK_LIVE_EVENT=http://host:8080 OPAL_THINK_LIVE_OLLAMA=http://host:11434 \
+  OPAL_THINK_LIVE_MODEL=llama3.1:8b pytest tests/integration/test_live_event_interop.py -v
+# knobs: OPAL_THINK_LIVE_EVENT_ACTION, OPAL_THINK_LIVE_EVENT_KEY (env var name),
+#        OPAL_THINK_LIVE_TIMEOUT; evidence -> OPAL_THINK_LIVE_REPORT or $TMP
+```
