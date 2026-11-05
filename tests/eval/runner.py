@@ -29,6 +29,7 @@ Case YAML fields beyond the basics:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import subprocess
@@ -270,9 +271,16 @@ def generate_report(evalset_dir: Path, tmp_root: Path) -> dict[str, Any]:
     passed = sum(1 for r in results if r["outcome"] == "pass")
     failed = sum(1 for r in results if r["outcome"] == "fail")
     skipped_live = sum(1 for r in results if r["outcome"] == "skipped_live")
+    digest = hashlib.sha256()
+    for path in sorted(evalset_dir.glob("*.yaml")):
+        digest.update(path.name.encode())
+        digest.update(path.read_bytes())
+    env = environment_metadata(live_ran)
+    env["evalsets_sha256"] = digest.hexdigest()
+    env["model_ids"] = sorted({c.get("model_id", "default") for p in evalset_dir.glob("*.yaml") for c in load_cases(p)[1]})
     return {
         "generated_by": "opal-think evalset runner",
-        "environment": environment_metadata(live_ran),
+        "environment": env,
         "counts": {"total": len(results), "passed": passed, "failed": failed, "skipped_live": skipped_live},
         "cases": results,
     }

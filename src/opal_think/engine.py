@@ -258,35 +258,61 @@ class TaskEngine:
         # submit/poll, and sleep consumes time from this budget (contract: timeout
         # applies to the task, including time spent waiting on EVENT executions).
         deadline = asyncio.get_event_loop().time() + row["timeout_seconds"]
+        started = asyncio.get_event_loop().time()
+        # Per-task telemetry: provider/model, call counts, usage aggregation,
+        # rejections and duration — no prompts or payloads are recorded.
+        telemetry: dict[str, Any] = {
+            "provider_id": adapter.provider_id,
+            "model_id": row["model_id"],
+            "llm_calls": 0,
+            "tool_calls": 0,
+            "validation_rejections": 0,
+            "usage": {},
+        }
+
+        def finish(status: str, **kwargs) -> None:
+            telemetry["duration_ms"] = int((asyncio.get_event_loop().time() - started) * 1000)
+            self._finish(task_id, status, telemetry=telemetry, **kwargs)
+
         try:
-            answer = await self._execute(task_id, adapter, row, discovered, deadline)
+            answer = await self._execute(task_id, adapter, row, discovered, deadline, telemetry)
         except _TaskCancelled:
-            self._finish(task_id, "cancelled")
+            finish("cancelled")
         except _TaskTimeout:
-            self._finish(task_id, "timed_out", error={"code": "timed_out", "message": "task deadline exceeded"})
+            finish("timed_out", error={"code": "timed_out", "message": "task deadline exceeded"})
         except ProviderUnavailable as exc:
-            self._finish(task_id, "failed", error={"code": "model_unavailable", "message": str(exc)})
+            finish("failed", error={"code": "model_unavailable", "message": str(exc)})
         except CapabilityUnsupported as exc:
             # Listed-but-unsupported model/feature is a capability finding, not an outage.
-            self._finish(task_id, "failed", error={"code": "unsupported_capability", "message": str(exc)})
+            finish("failed", error={"code": "unsupported_capability", "message": str(exc)})
         except OpalHTTPException as exc:
-            self._finish(task_id, "failed", error={"code": exc.code, "message": exc.message})
+            finish("failed", error={"code": exc.code, "message": exc.message})
         except Exception as exc:  # noqa: BLE001 - last-resort task failure, logged
             logger.exception("task %s failed unexpectedly", task_id)
-            self._finish(task_id, "failed", error={"code": "internal", "message": f"{type(exc).__name__}: {exc}"})
+            finish("failed", error={"code": "internal", "message": f"{type(exc).__name__}: {exc}"})
         else:
-            self._finish(task_id, "completed", answer=answer)
+            finish("completed", answer=answer)
         finally:
             self._cancels.pop(task_id, None)
             self._runners.pop(task_id, None)
 
-    def _finish(self, task_id: str, status: str, answer: str | None = None, error: dict | None = None) -> None:
+    def _finish(
+        self, task_id: str, status: str, answer: str | None = None, error: dict | None = None, telemetry: dict | None = None
+    ) -> None:
         self._store.update_task(task_id, status=status, answer=answer, error=error, finished_at=_now())
         data: dict[str, Any] = {"status": status}
         if answer is not None:
             data["answer"] = answer
         if error is not None:
             data["error"] = error
+        if telemetry is not None:
+            data["telemetry"] = telemetry
+            logger.info(
+                "task %s finished status=%s telemetry=%s",
+                task_id,
+                status,
+                json.dumps(telemetry, sort_keys=True, default=str),
+            )
         self._emit(task_id, _TERMINAL_EVENTS[status], data)
         self._close_subscribers(task_id)
 
@@ -309,6 +335,7 @@ class TaskEngine:
         row: dict[str, Any],
         discovered: DiscoveredModel,
         deadline: float,
+        telemetry: dict[str, Any],
     ) -> str:
         """Guarded loop: reason -> validate tool calls -> EVENT execute+poll -> feed result -> repeat."""
         model_name = row["model_id"].split(":", 1)[1]
@@ -353,6 +380,7 @@ class TaskEngine:
                 raise _TaskCancelled
             messages = self._budget_messages(messages, discovered.context_window)
             if use_stream:
+                telemetry["llm_calls"] += 1
                 text = await self._with_deadline(
                     task_id,
                     self._collect_stream(task_id, adapter, model_name, messages),
@@ -365,6 +393,10 @@ class TaskEngine:
                     adapter.generate(model_name, messages, tools=tools or None),
                     self._remaining(task_id, deadline),
                 )
+                telemetry["llm_calls"] += 1
+                for key, value in (generation.usage or {}).items():
+                    if isinstance(value, int | float):
+                        telemetry["usage"][key] = telemetry["usage"].get(key, 0) + value
                 text, tool_calls = strip_think_blocks(generation.text), generation.tool_calls
                 if text:
                     self._emit(task_id, "task.output", {"text": text})
@@ -388,7 +420,9 @@ class TaskEngine:
                         f"action request dropped: exceeds {_MAX_ACTION_CALLS_PER_STEP} per step",
                     )
                 else:
-                    outcome = await self._run_action(task_id, event_client, allowed, schemas, call, context, row, deadline)
+                    outcome = await self._run_action(
+                        task_id, event_client, allowed, schemas, call, context, row, deadline, telemetry
+                    )
                 messages.append(adapter.tool_result_message(call, outcome))
         raise OpalHTTPException(503, "step_limit", f"task exhausted max_steps={row['max_steps']} without an answer")
 
@@ -478,9 +512,12 @@ class TaskEngine:
             },
         }
 
-    async def _run_action(self, task_id, event_client, allowed, schemas, call, context, row, deadline) -> str:
+    async def _run_action(
+        self, task_id, event_client, allowed, schemas, call, context, row, deadline, telemetry
+    ) -> str:
         """Validate + submit one tool call through EVENT and poll to terminal. Returns tool-result text."""
         action_id = call.action_id or "unknown"
+        telemetry["tool_calls"] += 1
         if event_client is None:
             self._action_step(task_id, action_id, None, None, "failed", "no EVENT integration is configured")
             return json.dumps({"status": "error", "error": "event_unavailable"})
@@ -502,6 +539,7 @@ class TaskEngine:
             try:
                 jsonschema.validate(event["data"], schema)
             except jsonschema.ValidationError as exc:
+                telemetry["validation_rejections"] += 1
                 detail = exc.message[:200]
                 self._action_step(task_id, action_id, None, None, "failed", f"arguments rejected by input_schema: {detail}")
                 return json.dumps({"status": "error", "error": "invalid_arguments", "detail": detail})
