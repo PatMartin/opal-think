@@ -26,7 +26,12 @@ from opal_think.event_client import (
     normalize_execution_result,
     sanitize_action_input,
 )
-from opal_think.providers import DiscoveredModel, ProviderAdapter, ProviderUnavailable
+from opal_think.providers import (
+    CapabilityUnsupported,
+    DiscoveredModel,
+    ProviderAdapter,
+    ProviderUnavailable,
+)
 from opal_think.providers.registry import ProviderRegistry
 from opal_think.schemas import TaskCreate
 from opal_think.settings_registry import SettingsRegistry
@@ -260,6 +265,9 @@ class TaskEngine:
             self._finish(task_id, "timed_out", error={"code": "timed_out", "message": "task deadline exceeded"})
         except ProviderUnavailable as exc:
             self._finish(task_id, "failed", error={"code": "model_unavailable", "message": str(exc)})
+        except CapabilityUnsupported as exc:
+            # Listed-but-unsupported model/feature is a capability finding, not an outage.
+            self._finish(task_id, "failed", error={"code": "unsupported_capability", "message": str(exc)})
         except OpalHTTPException as exc:
             self._finish(task_id, "failed", error={"code": exc.code, "message": exc.message})
         except Exception as exc:  # noqa: BLE001 - last-resort task failure, logged

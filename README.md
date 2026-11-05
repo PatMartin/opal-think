@@ -77,7 +77,7 @@ simulated vs real-model runs distinctly with model/endpoint/git provenance.
 |---|---|---|
 | REST (all ops), CLI, SPA | ✅ 149 tests | smoke-verified |
 | Ollama | ✅ mocked transport | ✅ verified vs 192.168.1.88 (`OPAL_THINK_LIVE_OLLAMA` gated tests) |
-| OpenAI | ✅ mocked transport | ❌ no credentials |
+| OpenAI | ✅ mocked transport | ⚠️ opt-in smoke only (`OPAL_THINK_LIVE_*`); no credentials in CI |
 | EVENT | ✅ `FakeEventClient` | ❌ no service; execute-only auth is an EVENT 1.4.0 dependency |
 
 ## SPA deployment and authentication
@@ -126,4 +126,15 @@ OPAL_THINK_LIVE_OLLAMA=http://host:11434 OPAL_THINK_LIVE_MODEL=llama3.1:8b \
 # knobs: OPAL_THINK_LIVE_TIMEOUT=240 OPAL_THINK_LIVE_TOOL_TRIALS=1 OPAL_THINK_LIVE_REPORT=out.json
 # evidence (model tag, quantization, ollama version, per-test outcomes) is written
 # to OPAL_THINK_LIVE_REPORT or $TMP/opal_think_live_smoke.json
+```
+
+Live OpenAI-compatible smoke is likewise opt-in — base URL + model + a credential
+*reference* (the key value is only ever read via `env:`; possible metered API cost):
+
+```bash
+export OPENAI_API_KEY=sk-...
+OPAL_THINK_LIVE_OPENAI=https://api.openai.com OPAL_THINK_LIVE_OPENAI_MODEL=gpt-4o-mini \
+  pytest tests/integration/test_openai_tool_smoke.py -v
+# OPAL_THINK_LIVE_OPENAI_KEY overrides which env var name holds the key (default OPENAI_API_KEY)
+# evidence -> OPAL_THINK_LIVE_REPORT or $TMP/opal_think_live_openai_smoke.json
 ```

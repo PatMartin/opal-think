@@ -14,9 +14,24 @@ from typing import Any
 
 import httpx
 
-from opal_think.providers import DiscoveredModel, Generation, ProviderUnavailable, ToolCallRequest
+from opal_think.providers import (
+    CapabilityUnsupported,
+    DiscoveredModel,
+    Generation,
+    ProviderUnavailable,
+    ToolCallRequest,
+)
 
 _DISCOVERY_TIMEOUT = 5.0
+_UNSUPPORTED_HINTS = (
+    "model_not_found",
+    "does not exist",
+    "does not support",
+    "unknown model",
+    "unsupported",
+    "invalid model",
+    "invalid_model",
+)
 
 
 def _resolve_credential(credential_ref: str | None) -> str | None:
@@ -24,6 +39,29 @@ def _resolve_credential(credential_ref: str | None) -> str | None:
         return None
     name = credential_ref.removeprefix("env:")
     return os.environ.get(name)
+
+
+def _chat_error(response: httpx.Response) -> Exception:
+    """Classify a failed chat-completions call: unsupported capability vs outage.
+
+    A listed model may still not support chat completions or tools: 404 (unknown
+    model/endpoint) and 400 bodies that explicitly report an unknown/unsupported
+    model or feature raise :class:`CapabilityUnsupported`. Everything else —
+    401/429/5xx, transport errors — is :class:`ProviderUnavailable`. The provider's
+    error detail is preserved (bounded) so the distinction stays auditable.
+    """
+    detail = ""
+    try:
+        error = (response.json() or {}).get("error") or {}
+        detail = " ".join(str(error.get(k) or "") for k in ("code", "type", "message")).strip()
+    except ValueError:
+        detail = response.text
+    message = f"openai chat failed: HTTP {response.status_code} {detail[:300]}".strip()
+    if response.status_code == 404 or (
+        response.status_code == 400 and any(hint in detail.lower() for hint in _UNSUPPORTED_HINTS)
+    ):
+        return CapabilityUnsupported(message)
+    return ProviderUnavailable(message)
 
 
 class OpenAIAdapter:
@@ -90,10 +128,14 @@ class OpenAIAdapter:
         except httpx.HTTPError as exc:
             raise ProviderUnavailable(f"openai chat failed: {exc}") from exc
         if response.status_code >= 400:
-            raise ProviderUnavailable(f"openai chat failed: HTTP {response.status_code}")
+            raise _chat_error(response)
         data = response.json()
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ProviderUnavailable("openai chat returned malformed response: missing choices")
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise ProviderUnavailable("openai chat returned malformed response: missing message")
         tool_calls = [
             ToolCallRequest(
                 action_id=(call.get("function") or {}).get("name", "unknown"),
@@ -103,9 +145,9 @@ class OpenAIAdapter:
             for call in message.get("tool_calls") or []
         ]
         return Generation(
-            text=message.get("content") or "",
+            text=message.get("content") or message.get("refusal") or "",
             tool_calls=tool_calls,
-            finish_reason=choice.get("finish_reason"),
+            finish_reason=choices[0].get("finish_reason"),
             usage=data.get("usage") or {},
         )
 
@@ -117,7 +159,8 @@ class OpenAIAdapter:
                 client.stream("POST", f"{self._base}/v1/chat/completions", headers=self._headers(), json=payload) as response,
             ):
                 if response.status_code >= 400:
-                    raise ProviderUnavailable(f"openai chat failed: HTTP {response.status_code}")
+                    await response.aread()  # streaming bodies are unread until consumed
+                    raise _chat_error(response)
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
