@@ -14,7 +14,7 @@ def test_tree_renders_rooted_ascii() -> None:
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     assert lines[0] == "opal-think"
-    assert any(line.startswith(("|-- ", "`-- ")) for line in lines)  # ascii connectors
+    assert any(line.startswith(("|-- ", "-- ")) for line in lines)  # ascii connectors
 
 
 def test_tree_covers_commands_and_arguments() -> None:

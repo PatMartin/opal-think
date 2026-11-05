@@ -520,7 +520,7 @@ def _tree_lines(command: click.Command, prefix: str, lines: list[str]) -> None:
     items: list[tuple[str, object]] = [("param", p) for p in params] + [("cmd", s) for s in subs]
     for index, (kind, item) in enumerate(items):
         last = index == len(items) - 1
-        connector = "`-- " if last else "|-- "
+        connector = "-- " if last else "|-- "
         if kind == "param":
             lines.append(prefix + connector + _param_label(item))
         else:
