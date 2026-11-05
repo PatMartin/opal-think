@@ -312,7 +312,7 @@ class TaskEngine:
     ) -> str:
         """Guarded loop: reason -> validate tool calls -> EVENT execute+poll -> feed result -> repeat."""
         model_name = row["model_id"].split(":", 1)[1]
-        messages = self._build_messages(row)
+        messages = self._budget_messages(self._build_messages(row), discovered.context_window)
         context = {
             "session_id": row.get("opal_session_id"),
             "transaction_id": row.get("opal_transaction_id"),
@@ -351,6 +351,7 @@ class TaskEngine:
         for step_index in range(1, row["max_steps"] + 1):
             if self._cancels[task_id].is_set():
                 raise _TaskCancelled
+            messages = self._budget_messages(messages, discovered.context_window)
             if use_stream:
                 text = await self._with_deadline(
                     task_id,
@@ -588,6 +589,46 @@ class TaskEngine:
             work.cancel()
             raise _TaskCancelled
         return work.result()
+
+    _CONTEXT_FALLBACK_TOKENS = 4096  # when the model reports no context_window
+    _CONTEXT_RESERVE_TOKENS = 1024  # response + tool-call headroom
+
+    @staticmethod
+    def _est_tokens(message: dict) -> int:
+        """Approximate token estimate (chars/4) — deliberately crude, no tokenizer dependency."""
+        return max(1, len(json.dumps(message, default=str)) // 4)
+
+    @classmethod
+    def _budget_messages(cls, messages: list[dict], context_window: int | None) -> list[dict]:
+        """Deterministic context budgeting at the provider boundary.
+
+        Leading system messages and the final user-started group (latest prompt plus
+        its coherent tool-call/result pairs) are protected; oldest whole groups are
+        dropped first so a kept group never orphans a tool result from its call. If
+        the protected minimum alone exceeds the budget, raise ``context_exceeded`` —
+        an explicit failure, never silent truncation of the live turn.
+        """
+        budget = (context_window or cls._CONTEXT_FALLBACK_TOKENS) - cls._CONTEXT_RESERVE_TOKENS
+        head_end = next((i for i, m in enumerate(messages) if m.get("role") != "system"), len(messages))
+        head, rest = messages[:head_end], messages[head_end:]
+        groups: list[list[dict]] = []
+        for m in rest:
+            if m.get("role") == "user" or not groups:
+                groups.append([m])
+            else:
+                groups[-1].append(m)
+        protected = groups[-1] if groups else []
+        used = sum(cls._est_tokens(m) for m in head + protected)
+        if used > budget:
+            raise OpalHTTPException(422, "context_exceeded", "prompt and required context exceed the model context budget")
+        kept: list[list[dict]] = []
+        for group in reversed(groups[:-1]):
+            cost = sum(cls._est_tokens(m) for m in group)
+            if used + cost > budget:
+                break
+            kept.insert(0, group)
+            used += cost
+        return head + [m for g in kept for m in g] + protected
 
     def _build_messages(self, row: dict[str, Any]) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [{"role": "system", "content": _SYSTEM_PROMPT}]
