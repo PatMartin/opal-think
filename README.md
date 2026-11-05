@@ -108,7 +108,22 @@ data access. Deployment notes:
 ## Development
 
 ```bash
-pytest            # 149 tests (live-gated ones skip without env)
+pytest                 # deterministic suite (live-gated tests skip without env)
 ruff check .
-OPAL_THINK_LIVE_OLLAMA=http://host:11434 OPAL_THINK_LIVE_MODEL=smollm:360m pytest tests/integration
+bash scripts/verify.sh # ruff + deterministic pytest with pass/fail counts
+```
+
+Live Ollama smoke is strictly opt-in — nothing live runs unless BOTH env vars are
+set. Tool tests require a model advertising the `tools` capability
+(e.g. llama3.1, qwen2.5, mistral-nemo); a non-tool model skips descriptively, a
+tool-capable model that emits no call fails as a capability finding. EVENT is the
+in-process `mock_http_event` fixture serving one read-only diagnostic action:
+real inference and wire shape, zero machine mutation.
+
+```bash
+OPAL_THINK_LIVE_OLLAMA=http://host:11434 OPAL_THINK_LIVE_MODEL=llama3.1:8b \
+  pytest tests/integration -v
+# knobs: OPAL_THINK_LIVE_TIMEOUT=240 OPAL_THINK_LIVE_TOOL_TRIALS=1 OPAL_THINK_LIVE_REPORT=out.json
+# evidence (model tag, quantization, ollama version, per-test outcomes) is written
+# to OPAL_THINK_LIVE_REPORT or $TMP/opal_think_live_smoke.json
 ```
