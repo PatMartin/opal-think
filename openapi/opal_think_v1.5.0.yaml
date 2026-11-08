@@ -1,0 +1,983 @@
+openapi: 3.1.0
+info:
+  title: OPAL Think API
+  version: 1.5.0
+  description: |
+    OPAL-THINK is a model-neutral, guarded reasoning service. The OpenAPI contract is authoritative; CLI and SPA only call REST.
+
+    Architecture decisions (ratified):
+    - A Task is the universal unit of intelligent work; CLI `ask` and `chat` are convenience clients of Task creation.
+    - Sessions are optional and must be explicitly created; no implicit session on stateless Task creation.
+    - Task creation is asynchronous (HTTP 202 + Location); watch via SSE or show the final Task record.
+    - No independent tool registry, approvals subsystem, workflow engine, or ZeroMQ subscriber in THINK.
+    - THINK discovers enabled registered OPAL-EVENT actions and invokes them via REST; it checks /executions/{id} until terminal. EVENT owns action definitions, dispatch, limits and execution records.
+    - THINK has EVENT permissions to list/show actions, execute enabled actions, and read their execution results; no permission to administer actions, rules, settings or credentials. EVENT must enforce this with an execute-only principal (existing EVENT 1.4.0 needs finer-grained authorization).
+    - EVENT triggers THINK through registered HTTP actions targeting POST /api/v1/tasks/. The input must be transformed to TaskCreate and may carry untrusted event context; EVENT HTTP 202 signifies task admission, not eventual success.
+    - Tools are invoked only through EVENT. THINK must never execute arbitrary model-generated shell code, URLs, or Python directly.
+    - Constrain all tasks with server-enforced step/time/concurrency ceilings and forbid model-issued privilege changes. Allow all enabled registered EVENT actions within EVENT's permissions; do not add a second approval system.
+    - Prevent recursive EVENT→THINK→EVENT feedback by bounding causation depth and rejecting repeated triggering chains; apply these controls across tasks, not only within a task's max_steps. Required infrastructure behavior can be implemented by EVENT and THINK using existing OPAL correlation metadata.
+    - EVENT is authoritative for action execution status: 202 means admission; queued/running/dropped/failed/timed_out/succeeded must be interpreted. No automatic retries, ordering, exactly-once delivery, or rollback of side effects are promised.
+    - The assistant's readable decisions are short summaries and action references, never hidden chain-of-thought or secrets.
+    - Evaluation readiness: optional caller metadata is preserved on Task records; action steps report sanitized action_input. No evalset management API is introduced.
+
+    OPAL suite conventions:
+    - /api/v1 namespace, trailing slash on collection roots, 201+Location for session creation, 202+Location for async task admission, 204 deletion.
+    - X-Opal-Session-Id identifies a logical trace, not a server-created Session; TaskCreate.session_id identifies an actual Session resource. If both are present, propagate the resource session ID as the canonical context header. Do not treat these identifiers as authorization.
+    - X-Opal-Transaction-Id is logical workflow tracing, not a distributed atomic transaction; X-Opal-Request-Id is per HTTP hop, and X-Opal-Causation-Id identifies immediate causal parent when known. Generate transaction/request IDs when absent and return known IDs on success/error and initial stream headers. Outbound REST requests regenerate request ID, preserve transaction/context and set causation.
+    - IDs are printable, non-whitespace ASCII tokens of 1..128 chars. Invalid client-provided context IDs return 422.
+    - Growing task and session histories use cursor pagination (filter-scoped, deterministic, expiring); model catalogs are bounded and not paginated.
+    - Single-setting GET/PUT/DELETE and collection GET/PATCH use strong portable-configuration ETags, mandatory If-Match on mutation, 428 if missing, 412 if stale.
+    - Credentials are configured as references; never return raw secret material. On non-loopback bindings require REST authentication.
+    - TASK stream is live SSE, no guaranteed replay. Final Task snapshot remains source of truth.
+    - No task deletion: cancellation affects active work; retention controls cleanup. Session removal deletes session context and its retained linked tasks, but never EVENT execution history.
+
+    Recommended initial setting keys (registered keys are discoverable through GET settings):
+    `models.default_id`, `providers.<id>.type`, `providers.<id>.base_url`, `providers.<id>.enabled`, `providers.<id>.credential_ref`, `event.base_url`, `event.credential_ref`, `task.default_max_steps`, `task.max_steps_limit`, `task.default_timeout_seconds`, `task.timeout_limit_seconds`, `task.max_concurrent`, `task.retention_days`, `session.retention_days`.
+    Provider adapters can extend settings without changing the core REST schema. Input schema and natural-language descriptions for EVENT actions are recommended EVENT-side enhancements and not new THINK APIs.
+  license:
+    name: Internal use
+servers:
+- url: http://127.0.0.1:8080
+  description: Illustrative local endpoint; actual bind address and port are configurable.
+tags:
+- name: tasks
+  description: Universal reasoning and autonomous work unit.
+- name: sessions
+  description: Optional persistent conversational context.
+- name: models
+  description: Read-only model discovery.
+- name: settings
+  description: Service settings with per-key management.
+- name: health
+  description: Health, liveness, and readiness.
+security:
+- BearerAuth: []
+paths:
+  /api/v1/tasks/:
+    parameters:
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
+    post:
+      tags:
+      - tasks
+      operationId: create_task
+      summary: Create task
+      description: Submit one unit of intelligent work. Returns 202 immediately with durable task ID; not a completed
+        answer. This is also the endpoint for EVENT HTTP actions. session_id is optional; an existing managed session
+        serializes active tasks (409 if busy). Idempotency-Key can safely repeat admission but does not guarantee
+        exactly-once action side effects. All context is untrusted. No separate chat REST endpoint.
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreate'
+      responses:
+        '202':
+          description: Accepted for task execution, not completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+            Location:
+              $ref: './shared/opal_kernel.yaml#/components/headers/Location'
+        '400':
+          $ref: './shared/opal_kernel.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
+        '409':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Conflict'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: './shared/opal_kernel.yaml#/components/responses/TooManyRequests'
+        '503':
+          $ref: './shared/opal_kernel.yaml#/components/responses/ServiceUnavailable'
+      x-opal-cli: task create / ask / chat
+    get:
+      tags:
+      - tasks
+      operationId: list_tasks
+      summary: List retained tasks
+      description: Newest-first deterministic pagination by (created_at,id). Cursors bind to filters and expire.
+        Includes standalone and session-linked tasks. Retention settings remove old task records automatically;
+        no task DELETE operation.
+      parameters:
+      - $ref: '#/components/parameters/TaskStatus'
+      - $ref: '#/components/parameters/TaskSessionFilter'
+      - $ref: './shared/opal_kernel.yaml#/components/parameters/Limit'
+      - $ref: './shared/opal_kernel.yaml#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Task page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskPage'
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+        '400':
+          $ref: './shared/opal_kernel.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli: task list
+  /api/v1/tasks/{task_id}:
+    parameters:
+    - $ref: '#/components/parameters/TaskId'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
+    get:
+      tags:
+      - tasks
+      operationId: show_task
+      summary: Show task
+      description: Authoritative snapshot of status, user-visible answer and bounded step summaries. A completed
+        task retains its answer even if a live stream was missed. Do not expose private model chain-of-thought,
+        raw secrets, or unrestricted EVENT logs.
+      responses:
+        '200':
+          description: Task snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli: task show
+  /api/v1/tasks/{task_id}/stream:
+    parameters:
+    - $ref: '#/components/parameters/TaskId'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
+    get:
+      tags:
+      - tasks
+      operationId: watch_task
+      summary: Watch task output and progress
+      description: 'Live Server-Sent Events (SSE), Content-Type: text/event-stream, JSON data frames. Event names:
+        task.started, task.progress, task.output, task.action, task.completed, task.failed, task.cancelled, task.timed_out.
+        task.output contains incremental user-facing text only when the model supports streaming; progress events
+        contain concise summaries and EVENT action IDs/execution IDs. Every event data object carries task_id, timestamp,
+        type and data. No token or event replay guarantee; connecting after task termination delivers its current
+        terminal snapshot then closes. Clients MUST GET the Task for authoritative final output and after interruptions.
+        Stream errors after headers are sent use an SSE task.failed event or abrupt disconnect, never a new HTTP
+        status.'
+      responses:
+        '200':
+          description: Live SSE stream, ending on a terminal task status.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE frames with `event:` and JSON `data:` lines.
+              example: |+
+                event: task.progress
+                data: {"task_id":"task_123","timestamp":"2026-11-01T16:00:01Z","type":"task.progress","data":{"summary":"Inspecting GPU"}}
+
+                event: task.completed
+                data: {"task_id":"task_123","timestamp":"2026-11-01T16:00:04Z","type":"task.completed","data":{"status":"completed"}}
+
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli: task watch
+  /api/v1/tasks/{task_id}/cancel:
+    parameters:
+    - $ref: '#/components/parameters/TaskId'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
+    post:
+      tags:
+      - tasks
+      operationId: cancel_task
+      summary: Request task cancellation
+      description: Request cooperative termination. Accepted cancellation stops new reasoning/action dispatch; an
+        EVENT action already running may still complete, and its side effects are not undone. Repeated cancellation
+        of an in-progress task is idempotent. Terminal task returns 409. Cancellation takes effect asynchronously;
+        poll/show or watch for cancelled or another terminal status.
+      responses:
+        '202':
+          description: Cancellation requested, not guaranteed instantaneous.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
+        '409':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Conflict'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli: task cancel
+  /api/v1/sessions/:
+    parameters:
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
+    post:
+      tags:
+      - sessions
+      operationId: add_session
+      summary: Add session
+      description: Create an optional durable context container. Without a Session, Tasks are independent. Starting
+        interactive CLI chat without --session-id creates a Session via this endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCreate'
+      responses:
+        '201':
+          description: Session created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+            Location:
+              $ref: './shared/opal_kernel.yaml#/components/headers/Location'
+        '400':
+          $ref: './shared/opal_kernel.yaml#/components/responses/BadRequest'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: './shared/opal_kernel.yaml#/components/responses/TooManyRequests'
+      x-opal-cli: session add
+    get:
+      tags:
+      - sessions
+      operationId: list_sessions
+      summary: List sessions
+      description: Newest updated first, deterministically ordered by (updated_at,id); opaque cursors expire. For
+        turns in a conversation, list tasks filtered by session_id.
+      parameters:
+      - $ref: './shared/opal_kernel.yaml#/components/parameters/Limit'
+      - $ref: './shared/opal_kernel.yaml#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Session page.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionPage'
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli: session list
+  /api/v1/sessions/{session_id}:
+    parameters:
+    - $ref: '#/components/parameters/SessionId'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
+    get:
+      tags:
+      - sessions
+      operationId: show_session
+      summary: Show session
+      description: Session metadata; list its tasks using GET /api/v1/tasks/?session_id=...
+      responses:
+        '200':
+          description: Session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli: session show
+    delete:
+      tags:
+      - sessions
+      operationId: remove_session
+      summary: Remove session
+      description: Delete session context AND its retained linked task history. Reject with 409 if any task belonging
+        to this session remains queued/running; cancel tasks first. Irreversible from API. Independently retained
+        EVENT execution records are outside this deletion and remain subject to EVENT retention settings.
+      responses:
+        '204':
+          description: Session and linked task records removed.
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
+        '409':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Conflict'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli: session remove
+  /api/v1/models/:
+    parameters:
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
+    get:
+      tags:
+      - models
+      operationId: list_models
+      summary: List available and known models
+      description: Discover all configured model providers and their models. Stable opaque model IDs; unavailable
+        models may be listed with available=false. Bounded catalog; no model installation or deletion is exposed.
+        Provider endpoints/secret refs are service settings.
+      responses:
+        '200':
+          description: Complete model catalog.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Model'
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: './shared/opal_kernel.yaml#/components/responses/ServiceUnavailable'
+      x-opal-cli: model list
+  /api/v1/models/{model_id}:
+    parameters:
+    - $ref: '#/components/parameters/ModelId'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
+    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
+    get:
+      tags:
+      - models
+      operationId: show_model
+      summary: Show model
+      description: Return discovered model capabilities. Model IDs are opaque; do not infer provider behavior from
+        names.
+      responses:
+        '200':
+          description: Model description.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Model'
+          headers:
+            X-Opal-Session-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
+        '401':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
+        '403':
+          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
+        '404':
+          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
+        '422':
+          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli: model show
+  /api/v1/settings/:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/settings_collection'
+    x-opal-cli:
+      get: 'settings list'
+  /api/v1/settings/{key}:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/settings_key'
+    x-opal-cli:
+      get: 'settings show'
+      put: 'settings set'
+      delete: 'settings remove'
+  /api/v1/health/:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/health'
+    x-opal-cli:
+      get: 'health'
+  /api/v1/health/live:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/health_live'
+  /api/v1/health/ready:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/health_ready'
+components:
+  securitySchemes:
+    BearerAuth: {$ref: './shared/opal_kernel.yaml#/components/securitySchemes/BearerAuth'}
+  parameters:
+    TaskId:
+      name: task_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    ModelId:
+      name: model_id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+      description: URL-encode opaque ID.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+      description: Optional caller-scoped deduplication for task creation. Same key+body returns the same task;
+        conflicting body returns 409.
+    TaskStatus:
+      name: status
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/TaskStatus'
+    TaskSessionFilter:
+      name: session_id
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 1
+  schemas:
+    TaskStatus:
+      type: string
+      description: Terminal states are completed, failed, cancelled and timed_out.
+      enum:
+      - queued
+      - running
+      - completed
+      - failed
+      - cancelled
+      - timed_out
+    TaskCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        prompt:
+          type: string
+          description: User objective or question. Treat external-event text and context as untrusted data.
+          minLength: 1
+          maxLength: 32768
+          example: Diagnose my NVIDIA GPU
+        session_id:
+          type: string
+          description: Optional existing managed Session ID. Omit for a stateless task.
+          minLength: 1
+          maxLength: 128
+        model_id:
+          type: string
+          description: Optional model override; omit to use configured default.
+          minLength: 1
+          maxLength: 200
+        context:
+          type: object
+          additionalProperties: true
+          properties: {}
+          description: Optional application-supplied JSON context, such as event facts or references. Untrusted;
+            never an authorization source.
+        max_steps:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Maximum reasoning/tool iterations, capped by server policy.
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 3600
+          description: Task deadline, capped by server policy. Includes time waiting for EVENT executions.
+        metadata:
+          type: object
+          maxProperties: 32
+          additionalProperties: true
+          description: >-
+            Optional caller-supplied tracking metadata, such as evalset and case_id.
+            Data only: never sent to the model as context, interpreted as instructions,
+            or used for authorization. Implementations must bound JSON size and depth,
+            reject sensitive content, and persist it with the Task for later retrieval.
+      required:
+      - prompt
+      description: Universal entry point for ask, chat, autonomous tasks and EVENT-triggered work. Omission of session_id
+        does not create a session.
+    TaskStep:
+      type: object
+      additionalProperties: false
+      properties:
+        index:
+          type: integer
+          minimum: 1
+        kind:
+          type: string
+          description: Summarized step category, not internal chain-of-thought.
+          enum:
+          - reasoning
+          - action
+          - result
+        summary:
+          type: string
+          description: User-safe status description. No raw hidden reasoning or secrets.
+        action_id:
+          type:
+          - string
+          - 'null'
+        execution_id:
+          type:
+          - string
+          - 'null'
+        action_input:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+          description: >-
+            Sanitized input actually submitted to the OPAL-EVENT action execute
+            endpoint, including the event payload when applicable. Omitted on
+            non-action steps; null when no safe representation exists. Never
+            expose secrets, credentials, or hidden reasoning; diagnostic only.
+        status:
+          type: string
+          enum:
+          - started
+          - succeeded
+          - failed
+          - timed_out
+          - dropped
+          - cancelled
+        at:
+          type: string
+          format: date-time
+      required:
+      - index
+      - kind
+      - summary
+      - status
+      - at
+      description: Bounded, redacted task activity summary. EVENT is authoritative for action execution details.
+    Task:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        prompt:
+          type: string
+        metadata:
+          type: object
+          maxProperties: 32
+          additionalProperties: true
+          description: >-
+            Caller-supplied tracking metadata from TaskCreate, redacted if needed.
+            Empty object when omitted. Never influences reasoning or authorization.
+        session_id:
+          type:
+          - string
+          - 'null'
+        model_id:
+          type: string
+          description: Resolved model ID actually used.
+        max_steps:
+          type: integer
+          minimum: 1
+        timeout_seconds:
+          type: integer
+          minimum: 1
+        steps_completed:
+          type: integer
+          minimum: 0
+        cancel_requested:
+          type: boolean
+        answer:
+          type:
+          - string
+          - 'null'
+          description: Current or final user-facing response; authoritative after completed.
+        error:
+          oneOf:
+          - $ref: '#/components/schemas/TaskFailure'
+          - type: 'null'
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskStep'
+          description: Bounded summaries, refreshed on GET; use stream for live events.
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        finished_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+      required:
+      - id
+      - status
+      - prompt
+      - session_id
+      - model_id
+      - max_steps
+      - timeout_seconds
+      - steps_completed
+      - cancel_requested
+      - answer
+      - error
+      - steps
+      - created_at
+      - started_at
+      - finished_at
+    TaskFailure:
+      type: object
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          example: model_unavailable
+        message:
+          type: string
+      required:
+      - code
+      - message
+    TaskPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+        has_more:
+          type: boolean
+      required:
+      - items
+      - next_cursor
+      - has_more
+    SessionCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          description: Optional human-readable label.
+          minLength: 1
+          maxLength: 200
+      description: Create an optional conversation context; does not start a task.
+    Session:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        title:
+          type:
+          - string
+          - 'null'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        task_count:
+          type: integer
+          minimum: 0
+      required:
+      - id
+      - title
+      - created_at
+      - updated_at
+      - task_count
+    SessionPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Session'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+        has_more:
+          type: boolean
+      required:
+      - items
+      - next_cursor
+      - has_more
+    Model:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: Opaque model ID; use unchanged in task.model_id.
+          example: ollama:llama3.2
+        provider:
+          type: string
+          example: ollama
+        name:
+          type: string
+          example: llama3.2
+        available:
+          type: boolean
+          description: Available for inference now.
+        capabilities:
+          type: object
+          additionalProperties: false
+          properties:
+            streaming:
+              type: boolean
+            tool_calling:
+              type: boolean
+            structured_output:
+              type: boolean
+            vision:
+              type: boolean
+          required:
+          - streaming
+          - tool_calling
+          - structured_output
+          - vision
+          description: Measured/declared capabilities; unsupported features must not be assumed.
+        context_window:
+          type:
+          - integer
+          - 'null'
+          minimum: 1
+        description:
+          type:
+          - string
+          - 'null'
+      required:
+      - id
+      - provider
+      - name
+      - available
+      - capabilities
+      - context_window
+      - description
+      description: Models are discovered from configured provider adapters, not installed or deleted via this REST
+        API.
+x-opal-cli-commands:
+  ask: POST /api/v1/tasks/ + watch/show
+  chat: session add (optional initial) + POST /api/v1/tasks/ per turn
+  task:
+  - create
+  - list
+  - show
+  - watch
+  - cancel
+  session:
+  - add
+  - remove
+  - list
+  - show
+  model:
+  - list
+  - show
+  settings:
+  - list
+  - show
+  - set
+  - remove
+  health:
+  - health
+x-opal-event-integration:
+  source_contract: https://github.com/PatMartin/opal-api/blob/main/openapi/opal_event.yaml
+  actions_discovery: GET /api/v1/actions/
+  action_lookup: GET /api/v1/actions/{action_id}
+  execute: POST /api/v1/actions/{action_id}/execute
+  execution_read: GET /api/v1/executions/{execution_id}
+  required_event_permissions:
+  - actions:read
+  - actions:execute
+  - executions:read
+  forbidden_event_permissions:
+  - actions:write
+  - rules:write
+  - settings:write
+  note: Permission names are proposed for EVENT authorization enhancement, not claims that EVENT 1.4.0 already implements
+    them.
+x-opal-authorization: {$ref: './shared/opal_kernel.yaml#/x-opal-authorization'}
+x-opal-context-standard:
+  version: '1.4'
+  headers:
+  - X-Opal-Session-Id
+  - X-Opal-Transaction-Id
+  - X-Opal-Request-Id
+  - X-Opal-Causation-Id
+  session_mode: context-only
+  id_format: opaque-printable-ascii-1-to-128
+  transaction_atomicity: false
+  events:
+    $ref: './shared/opal_kernel.yaml#/x-opal-event-envelope'
+    metadata_schema_version: '1.0'
+  pagination:
+    history: cursor
+    configuration: none
+    default_limit: 100
+    max_limit: 500
+  concurrency:
+    settings_and_config_mutations: strong-etag-if-match-required
+    missing_status: 428
+    stale_status: 412
+  streaming: Include HTTP context headers before bytes; after headers are sent, failures are represented
+    by transport-specific terminal events or stream termination; no invented resumability.
