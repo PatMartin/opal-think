@@ -18,14 +18,12 @@ def test_list_settings(client: TestClient) -> None:
     assert response.status_code == 200
     assert response.headers["ETag"].startswith('"s')
     body = response.json()
+    # kernel OpalSettingsMap: flat dotted-key map + reserved pending_restart_fields
     assert body["pending_restart_fields"] == []
-    keys = [item["key"] for item in body["items"]]
-    assert keys == sorted(keys)
+    keys = sorted(k for k in body if k != "pending_restart_fields")
     assert "task.max_concurrent" in keys
     assert "providers.ollama.base_url" in keys
-    for item in body["items"]:
-        assert set(item) >= {"key", "value", "default", "is_default", "pending_restart"}
-        assert item["is_default"] is True
+    assert body["task.max_concurrent"] == 4
 
 
 def test_show_setting(client: TestClient) -> None:
@@ -111,44 +109,46 @@ def test_remove_setting_override(client: TestClient) -> None:
 
 def test_patch_settings_atomic(client: TestClient) -> None:
     # missing If-Match -> 428
-    assert client.patch("/api/v1/settings/", json={"values": {"task.max_concurrent": 6}}).status_code == 428
+    assert client.patch("/api/v1/settings/", json={"task.max_concurrent": 6}).status_code == 428
     # stale -> 412
     assert (
-        client.patch(
-            "/api/v1/settings/", json={"values": {"task.max_concurrent": 6}}, headers={"If-Match": '"s99"'}
-        ).status_code
+        client.patch("/api/v1/settings/", json={"task.max_concurrent": 6}, headers={"If-Match": '"s99"'}).status_code
         == 412
     )
     etag = client.get("/api/v1/settings/").headers["ETag"]
+    # reserved key is server-managed -> 422
+    assert (
+        client.patch("/api/v1/settings/", json={"pending_restart_fields": []}, headers={"If-Match": etag}).status_code
+        == 422
+    )
     # one bad key fails the whole patch (atomicity)
     bad = client.patch(
         "/api/v1/settings/",
-        json={"values": {"task.max_concurrent": 6, "task.retention_days": "x"}},
+        json={"task.max_concurrent": 6, "task.retention_days": "x"},
         headers={"If-Match": etag},
     )
     assert bad.status_code == 422
     assert client.get("/api/v1/settings/task.max_concurrent").json()["value"] == 4  # not applied
     good = client.patch(
         "/api/v1/settings/",
-        json={"values": {"task.max_concurrent": 6, "task.retention_days": 7}},
+        json={"task.max_concurrent": 6, "task.retention_days": 7},
         headers={"If-Match": etag},
     )
     assert good.status_code == 200
     assert good.headers["ETag"].startswith('"s')
-    values = {item["key"]: item["value"] for item in good.json()["items"]}
-    assert values["task.max_concurrent"] == 6 and values["task.retention_days"] == 7
+    assert good.json()["task.max_concurrent"] == 6 and good.json()["task.retention_days"] == 7
 
 
 def test_dynamic_provider_key_lifecycle(client: TestClient) -> None:
     # new provider id fields exist by definition; read default
     shown = client.get("/api/v1/settings/providers.myprovider.enabled")
     assert shown.status_code == 200 and shown.json()["is_default"] is True
-    keys = [i["key"] for i in client.get("/api/v1/settings/").json()["items"]]
+    keys = client.get("/api/v1/settings/").json()
     assert "providers.myprovider.enabled" not in keys  # not materialized yet
     etag = shown.headers["ETag"]
     created = client.put("/api/v1/settings/providers.myprovider.enabled", json={"value": True}, headers={"If-Match": etag})
     assert created.status_code == 200
-    keys = [i["key"] for i in client.get("/api/v1/settings/").json()["items"]]
+    keys = client.get("/api/v1/settings/").json()
     assert "providers.myprovider.enabled" in keys  # now materialized
     # invalid provider field -> 404
     assert client.get("/api/v1/settings/providers.myprovider.bogus").status_code == 404
@@ -173,10 +173,24 @@ def test_settings_persist_across_restart(tmp_path) -> None:
 def test_duplicate_collection_etag_second_write_fails(client: TestClient) -> None:
     """Same collection ETag used twice: exactly one mutation succeeds (atomic check+write)."""
     etag = client.get("/api/v1/settings/").headers["etag"]
-    ok = client.patch("/api/v1/settings/", json={"values": {"task.max_concurrent": 8}}, headers={"If-Match": etag})
+    ok = client.patch("/api/v1/settings/", json={"task.max_concurrent": 8}, headers={"If-Match": etag})
     assert ok.status_code == 200
-    stale = client.patch("/api/v1/settings/", json={"values": {"task.max_concurrent": 9}}, headers={"If-Match": etag})
+    stale = client.patch("/api/v1/settings/", json={"task.max_concurrent": 9}, headers={"If-Match": etag})
     assert stale.status_code == 412
+
+
+def test_malformed_if_match_rejected(client: TestClient) -> None:
+    """Kernel IfMatch: exactly one strong quoted ETag; weak/list/*/unquoted -> 422."""
+    for bad in ("s1", 'W/"s1"', "*", '"s1", "s2"', '""'):
+        assert (
+            client.put("/api/v1/settings/task.max_concurrent", json={"value": 8}, headers={"If-Match": bad}).status_code
+            == 422
+        ), bad
+        assert (
+            client.patch("/api/v1/settings/", json={"task.max_concurrent": 8}, headers={"If-Match": bad}).status_code
+            == 422
+        ), bad
+        assert client.delete("/api/v1/settings/task.max_concurrent", headers={"If-Match": bad}).status_code == 422, bad
 
 
 def test_invalid_patch_writes_nothing(client: TestClient) -> None:
@@ -184,7 +198,7 @@ def test_invalid_patch_writes_nothing(client: TestClient) -> None:
     etag = client.get("/api/v1/settings/").headers["etag"]
     resp = client.patch(
         "/api/v1/settings/",
-        json={"values": {"task.max_concurrent": 8, "bogus.key": 1}},
+        json={"task.max_concurrent": 8, "bogus.key": 1},
         headers={"If-Match": etag},
     )
     assert resp.status_code == 422

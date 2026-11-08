@@ -136,10 +136,15 @@ def settings_list(ctx: typer.Context) -> None:
     if _state(ctx).json_output:
         _emit(ctx, data)
         return
-    for item in data["items"]:
-        suffix = "  (default)" if item["is_default"] else "  *"
-        suffix += "  [restart pending]" if item["pending_restart"] else ""
-        typer.echo(f"{item['key']} = {json.dumps(item['value'])}{suffix}")
+    # The collection is a flat OpalSettingsMap; per-key GETs supply default/restart flags.
+    for key in sorted(k for k in data if k != "pending_restart_fields"):
+        try:
+            item = _call(ctx, "GET", f"/api/v1/settings/{key}").json()
+        except typer.Exit:
+            item = {"key": key, "value": data[key], "is_default": True, "pending_restart": False}
+        suffix = "  (default)" if item.get("is_default", True) else "  *"
+        suffix += "  [restart pending]" if item.get("pending_restart") else ""
+        typer.echo(f"{key} = {json.dumps(item.get('value', data[key]))}{suffix}")
     if data["pending_restart_fields"]:
         typer.echo(f"pending_restart_fields: {', '.join(data['pending_restart_fields'])}", err=True)
 

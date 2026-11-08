@@ -1,4 +1,4 @@
-"""Pydantic models mirroring ``opal_think.v1.4.0.yaml`` component schemas.
+"""Pydantic models mirroring ``openapi/opal_think_v1.5.0.yaml`` component schemas.
 
 The OpenAPI contract is authoritative; these models implement it exactly:
 ``additionalProperties: false`` maps to ``extra="forbid"``, required fields are non-defaulted,
@@ -198,19 +198,6 @@ class SettingUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     value: Any  # required; may still be JSON null
-
-
-class SettingsSnapshot(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    items: list[Setting]
-    pending_restart_fields: list[str]
-
-
-class SettingsPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    values: dict[str, Any] = Field(min_length=1)
 
 
 class Health(BaseModel):

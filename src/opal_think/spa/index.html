@@ -166,10 +166,18 @@ document.querySelectorAll("nav button").forEach((btn) => btn.addEventListener("c
 }));
 
 // ---- settings ----
-function renderSettings(data) {
+async function renderSettings(data) {
   const tbody = $("#settings-table tbody");
   tbody.innerHTML = "";
-  for (const item of data.items) {
+  // GET /settings/ is a flat OpalSettingsMap; per-key GETs supply default/restart flags.
+  const keys = Object.keys(data).filter((k) => k !== "pending_restart_fields").sort();
+  for (const key of keys) {
+    let item;
+    try {
+      item = (await api(`/api/v1/settings/${encodeURIComponent(key)}`)).body;
+    } catch (_) {
+      item = { key, value: data[key], default: null, is_default: true, pending_restart: false };
+    }
     const valueCell = td(el("span", { text: JSON.stringify(item.value) }), " ",
       item.is_default ? pill("default") : pill("set", "set"));
     if (item.pending_restart) valueCell.append(" ", pill("restart pending"));
@@ -190,7 +198,7 @@ function renderSettings(data) {
 }
 
 async function loadSettings() {
-  try { renderSettings((await api("/api/v1/settings/")).body); }
+  try { await renderSettings((await api("/api/v1/settings/")).body); }
   catch (e) { toast(`settings: ${e.message}`); }
 }
 

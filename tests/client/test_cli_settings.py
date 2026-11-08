@@ -51,7 +51,8 @@ def test_settings_list_json(api) -> None:
     result = runner.invoke(cli_main.think_app, ["--json", "settings", "list"])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert any(item["key"] == "task.max_concurrent" for item in data["items"])
+    assert data["task.max_concurrent"] == 4
+    assert data["pending_restart_fields"] == []
 
 
 def test_settings_show(api) -> None:

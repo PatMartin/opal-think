@@ -27,7 +27,7 @@ def _service_status(models_available: int, event_status: str) -> str:
     return "ok"
 
 
-@router.get("/", operation_id="get_health", summary="Service health")
+@router.get("/", operation_id="opal_health_get", summary="Service health")
 async def get_health(
     providers: ProviderRegistry = Depends(get_providers),
     settings: SettingsRegistry = Depends(get_settings),
@@ -46,14 +46,14 @@ async def get_health(
     )
 
 
-@router.get("/live", operation_id="get_liveness", summary="Liveness probe")
+@router.get("/live", operation_id="opal_health_live_get", summary="Liveness probe")
 def get_liveness() -> HealthProbe:
     return HealthProbe(status="ok", ready=True, details={"service": "opal-think", "version": __version__})
 
 
 @router.get(
     "/ready",
-    operation_id="get_readiness",
+    operation_id="opal_health_ready_get",
     summary="Readiness probe",
     response_model=HealthProbe,
     responses={503: {"model": HealthProbe, "description": "No usable model or service cannot accept tasks."}},
