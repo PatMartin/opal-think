@@ -30,7 +30,7 @@ opal-think-svc = "opal_think.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-opal_think = ["contract/opal_think.yaml", "spa/index.html"]
+opal_think = ["contract/opal_think.yaml", "contract/shared/opal_kernel.yaml", "spa/index.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

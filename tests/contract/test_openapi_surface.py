@@ -14,8 +14,16 @@ from fastapi.testclient import TestClient
 
 
 def _contract() -> dict:
-    text = resources.files("opal_think").joinpath("contract/opal_think.yaml").read_text(encoding="utf-8")
-    return yaml.safe_load(text)
+    """Contract spec with kernel pathItem ``$ref``s resolved (settings/health surface)."""
+    pkg = resources.files("opal_think").joinpath("contract")
+    spec = yaml.safe_load(pkg.joinpath("opal_think.yaml").read_text(encoding="utf-8"))
+    kernel = yaml.safe_load(pkg.joinpath("shared/opal_kernel.yaml").read_text(encoding="utf-8"))
+    path_items = kernel.get("components", {}).get("pathItems", {})
+    for path, item in spec["paths"].items():
+        if "$ref" in item:
+            resolved = path_items[item["$ref"].rsplit("/", 1)[1]]
+            spec["paths"][path] = {**resolved, **{k: v for k, v in item.items() if k != "$ref"}}
+    return spec
 
 
 def _generated(client: TestClient) -> dict:
@@ -81,4 +89,4 @@ def test_generated_openapi_parses_and_reports(client: TestClient) -> None:
     spec = _generated(client)
     assert spec["openapi"].startswith("3.1") or spec["openapi"].startswith("3.0")
     assert spec["info"]["title"] == "OPAL Think API"
-    assert spec["info"]["version"] == "1.4.0"
+    assert spec["info"]["version"] == "1.5.0"

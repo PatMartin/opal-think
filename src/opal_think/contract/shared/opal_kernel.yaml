@@ -1,0 +1,2311 @@
+# OPAL Suite Kernel — shared contract base for all OPAL service specs.
+# Consumed via external $ref; never published standalone. See info.description.
+
+openapi: 3.1.0
+info:
+  title: OPAL Suite Kernel
+  version: 1.2.0
+  description: 'Shared contract kernel for the OPAL suite (SUITE STANDARD v1.2).
+
+
+    This document is never served directly. Service specs under `openapi/` mount its reusable Path Items and reference
+    its components via external `$ref`s; published single-file artifacts are produced by `npm run bundle`.
+
+
+    Conventions encoded here: the four X-Opal-* correlation headers on every request and response; strong ETag +
+    mandatory If-Match on mutable configuration (428 missing, 412 stale); 204 for empty deletion; 201 + Location
+    for creation; the OpalError envelope for all 4xx/5xx JSON bodies; and the standard health/settings/backup/profiles/engines
+    route families.
+
+
+    Kernel schemas are deliberately open (`additionalProperties: true`) on union types: suite-standard required
+    fields are normative, and each service layers its own domain fields on top.'
+paths: {}
+x-opal-authorization:
+  version: '1.0'
+  description: Suite REST authentication and authorization semantics. Loopback-only deployments may explicitly disable
+    authentication; non-loopback deployments require authentication. Privileged configuration operations require
+    authorization. 401 means missing or invalid authentication; 403 means authenticated but not permitted. Correlation
+    IDs are never authorization credentials. Secret values must not appear in responses, exports, or error details.
+  semantics:
+    missing_or_invalid_credentials: '401'
+    authenticated_but_not_permitted: '403'
+    loopback: authentication may be explicitly disabled on loopback deployments
+    non_loopback: authentication required
+    privileged_operations: authorization required for configuration mutations
+    credentials: correlation headers are transport context, never authorization credentials
+    secrets: secret values must not appear in responses, exports, or error details
+x-opal-event-envelope:
+  propagate:
+  - session_id
+  - transaction_id
+  - request_id
+  - causation_id
+  zero_mq_frames: 2
+  compatibility: metadata_schema_version versions the optional data.metadata block only; the two-frame wire envelope
+    (topic + JSON with topic/data) is unchanged across versions. Consumers extract known correlation keys (session_id,
+    transaction_id, request_id, causation_id) and MUST ignore unknown metadata fields; producers may emit any metadata_schema_version
+    without breaking the wire contract.
+components:
+  headers:
+    OpalSessionIdHeader:
+      description: Effective OPAL session context for this response. Returned when a session identifier is known;
+        conditionally present.
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    OpalTransactionIdHeader:
+      description: Logical transaction identifier for this exchange. Always returned; generated when the inbound
+        request lacks one.
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    OpalRequestIdHeader:
+      description: Identifier of this inbound HTTP exchange. Always returned; regenerated for each downstream hop.
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    OpalCausationIdHeader:
+      description: Immediate parent event/request identifier for this response. Returned when applicable; conditionally
+        present.
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    ETag:
+      description: Strong revision of the portable logical configuration.
+      schema:
+        type: string
+    Location:
+      description: Canonical path of created resource.
+      schema:
+        type: string
+  parameters:
+    OpalSessionIdParameter:
+      name: X-Opal-Session-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[!-~]+$
+      description: OPAL suite context propagation; opaque and not an authentication credential.
+    OpalTransactionIdParameter:
+      name: X-Opal-Transaction-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[!-~]+$
+      description: OPAL suite context propagation; opaque and not an authentication credential.
+    OpalRequestIdParameter:
+      name: X-Opal-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[!-~]+$
+      description: OPAL suite context propagation; opaque and not an authentication credential.
+    OpalCausationIdParameter:
+      name: X-Opal-Causation-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[!-~]+$
+      description: OPAL suite context propagation; opaque and not an authentication credential.
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: Required current strong ETag of the complete logical configuration. Missing returns 428, stale
+        returns 412. One exact strong quoted tag required; weak tags, lists and * are rejected with 422.
+      schema:
+        type: string
+        pattern: ^"[^"]+"$
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+      description: Opaque filter-bound cursor. Invalid/expired=422.
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+      description: Maximum page size, server caps apply.
+    SettingKey:
+      name: key
+      in: path
+      required: true
+      description: Setting key.
+      schema:
+        type: string
+        minLength: 1
+    BackupFilename:
+      name: filename
+      in: path
+      required: true
+      description: 'Filename/identifier of a backup managed by the service. It must not contain
+
+        path separators or traversal components.
+
+        '
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: ^[^/\\]+$
+      example: opal-say-2026-10-04T230000Z.tar.gz
+    ProfileId:
+      name: profile_id
+      in: path
+      required: true
+      description: Numeric profile identifier.
+      schema:
+        type: integer
+        minimum: 1
+      example: 1
+    EngineId:
+      name: engine_id
+      in: path
+      required: true
+      description: Stable implementation-defined identifier of an installed TTS engine.
+      schema:
+        type: string
+        minLength: 1
+      example: piper
+  responses:
+    BadRequest:
+      description: Malformed request syntax or invalid parameter encoding.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    Unauthorized:
+      description: Missing or invalid authentication credentials.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    Forbidden:
+      description: Authenticated but not permitted for this operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    NotFound:
+      description: The addressed resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    Conflict:
+      description: The request conflicts with current resource state.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    PreconditionFailed:
+      description: 'If-Match precondition failed: the supplied ETag is stale.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    PayloadTooLarge:
+      description: Request payload exceeds the advertised limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    PreconditionRequired:
+      description: If-Match precondition required but missing.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    UnprocessableEntity:
+      description: Request was well-formed but failed semantic validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    TooManyRequests:
+      description: Rate limit exceeded; retry after the advertised interval.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    OperationFailed:
+      description: The operation was accepted but failed during execution.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    InternalError:
+      description: Unexpected internal failure.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+    ServiceUnavailable:
+      description: The service or a required dependency is currently unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+      headers:
+        X-Opal-Session-Id:
+          $ref: '#/components/headers/OpalSessionIdHeader'
+        X-Opal-Transaction-Id:
+          $ref: '#/components/headers/OpalTransactionIdHeader'
+        X-Opal-Request-Id:
+          $ref: '#/components/headers/OpalRequestIdHeader'
+        X-Opal-Causation-Id:
+          $ref: '#/components/headers/OpalCausationIdHeader'
+  schemas:
+    OpalErrorBody:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code.
+        message:
+          type: string
+          description: Human-readable diagnostic.
+        details:
+          description: Structured diagnostic detail; shape is code-specific.
+        request_id:
+          type: string
+        transaction_id:
+          type: string
+        session_id:
+          type:
+          - string
+          - 'null'
+        causation_id:
+          type:
+          - string
+          - 'null'
+        retryable:
+          type: boolean
+          description: Whether the caller may retry the same request.
+      required:
+      - code
+      - message
+      - request_id
+      - transaction_id
+      additionalProperties: false
+      description: Canonical OPAL suite error body; correlation identifiers mirror the response headers.
+    OpalError:
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/OpalErrorBody'
+      required:
+      - error
+      additionalProperties: false
+      description: Standard OPAL error envelope for all 4xx/5xx JSON responses.
+    OpalHealthProbe:
+      type: object
+      required:
+      - status
+      - ready
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          - degraded
+          - unavailable
+        ready:
+          type: boolean
+        details:
+          type: object
+          additionalProperties: true
+        version:
+          type: string
+          description: Service implementation version; conditionally present.
+      additionalProperties: true
+    OpalHealthReport:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          - degraded
+          - error
+          - warning
+          - healthy
+          - unhealthy
+          - unavailable
+          description: Overall state. Canonical values are ok/degraded/error; other values are accepted for backward
+            compatibility with per-service vocabularies.
+        version:
+          type: string
+          example: 1.0.0
+        active_profile_id:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+        engines:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional non-portable diagnostic information.
+        broker_running:
+          type: boolean
+        database_ready:
+          type: boolean
+        pending_restart:
+          anyOf:
+          - type: boolean
+          - type: array
+            items:
+              type: string
+          description: Restart-pending indicator (boolean) or list of pending fields (array); `pending_restart_fields`
+            is the canonical list form.
+        checks:
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+          type: array
+          title: Checks
+        checked_at:
+          type: string
+          format: date-time
+          title: Checked At
+        ready:
+          type: boolean
+          description: True when the service can perform useful work; probes use it as readiness.
+        uptime_seconds:
+          type: number
+          minimum: 0
+        components:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              state:
+                type: string
+              detail:
+                type: string
+            additionalProperties: false
+            required:
+            - state
+        metrics:
+          type: object
+          additionalProperties:
+            type: number
+        models_available:
+          type: integer
+          minimum: 0
+        event:
+          type: string
+          enum:
+          - available
+          - degraded
+          - unavailable
+          - not_configured
+        active_tasks:
+          type: integer
+          minimum: 0
+        pending_restart_fields:
+          type: array
+          items:
+            type: string
+      required:
+      - status
+      additionalProperties: true
+      description: Aggregate service health report. `status` is the only required field; all other sections are
+        service-defined.
+    OpalCursorPageMetadata:
+      type: object
+      required:
+      - next_cursor
+      - has_more
+      properties:
+        next_cursor:
+          type:
+          - string
+          - 'null'
+        has_more:
+          type: boolean
+    SettingRead:
+      type: object
+      properties:
+        id:
+          title: Id
+          type: integer
+        key:
+          title: Key
+          type: string
+        value:
+          title: Value
+          description: Native JSON setting value.
+        updated_at:
+          format: date-time
+          title: Updated At
+          type: string
+        default:
+          description: Default native JSON value, when safe to expose.
+        is_default:
+          type: boolean
+        pending_restart:
+          type: boolean
+      required:
+      - key
+      - value
+      additionalProperties: true
+      description: One setting key/value pair with optional lifecycle metadata.
+    SettingUpdate:
+      type: object
+      properties:
+        value:
+          description: New native JSON value for the setting.
+      required:
+      - value
+      additionalProperties: false
+      description: Replacement value for a single setting key.
+    OpalSettingsMap:
+      type: object
+      additionalProperties: true
+      description: 'The complete portable settings map: dotted keys to native JSON values. Secret material is never
+        included. `pending_restart_fields` is a reserved key naming settings that require a restart to take effect.'
+    OpalConfigExport:
+      type: object
+      properties:
+        format_version:
+          anyOf:
+          - type: string
+          - type: integer
+          description: Bundle format version; canonical form is a string such as "1.0.0".
+        exported_at:
+          type: string
+          format: date-time
+        engines:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpalEngine'
+        voices:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+        profiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpalProfile'
+        settings:
+          type: object
+          additionalProperties: true
+        wakewords:
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+          type: array
+          title: Wakewords
+          default: []
+        stt:
+          additionalProperties:
+            anyOf:
+            - type: string
+            - type: integer
+            - type: number
+            - type: boolean
+          type: object
+          title: Stt
+          default: {}
+        intents:
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+          type: array
+          title: Intents
+          default: []
+        slots:
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+          type: array
+          title: Slots
+          default: []
+        models:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+        sources:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+        pipelines:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+        zones:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+        rules:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+        monitors:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+        actions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+      required:
+      - format_version
+      - settings
+      additionalProperties: true
+      description: Portable logical configuration bundle. `format_version` and `settings` are the only suite-standard
+        members; all other sections are service-defined. Secrets and history are never included.
+    OpalBackupInfo:
+      type: object
+      properties:
+        filename:
+          type: string
+          title: Filename
+        size_bytes:
+          type: integer
+          title: Size Bytes
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      required:
+      - created_at
+      - filename
+      - size_bytes
+      additionalProperties: true
+      description: Metadata for one service-managed backup archive.
+    OpalBackupCreateResponse:
+      type: object
+      properties:
+        filename:
+          type: string
+        message:
+          type: string
+      required:
+      - filename
+      additionalProperties: true
+    OpalImportResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        validation:
+          $ref: '#/components/schemas/OpalValidationReport'
+        message:
+          anyOf:
+          - type: string
+          - type: 'null'
+        status:
+          type: string
+          const: imported
+          title: Status
+        backup_filename:
+          type: string
+          title: Backup Filename
+        counts:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Counts
+        warnings:
+          type: array
+          items:
+            anyOf:
+            - type: string
+            - type: object
+          description: Diagnostic entries (warnings); string or structured object per service.
+        revision:
+          type: string
+        pending_restart:
+          type: boolean
+      required: []
+      additionalProperties: true
+      description: Result of a configuration import/restore. Outcome fields are service-defined (`success`, `status`
+        and `revision` variants exist); no field is suite-standard.
+    OpalValidationReport:
+      type: object
+      properties:
+        valid:
+          type: boolean
+          description: True when the validated object/configuration is usable under current validation rules.
+        errors:
+          type: array
+          items:
+            anyOf:
+            - type: string
+            - type: object
+          description: Diagnostic entries (errors); string or structured object per service.
+        warnings:
+          type: array
+          items:
+            anyOf:
+            - type: string
+            - type: object
+          description: Diagnostic entries (warnings); string or structured object per service.
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional implementation-specific validation details.
+        sources:
+          additionalProperties:
+            type: boolean
+          type: object
+          title: Sources
+          default: {}
+        issues:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+        resolved_capabilities:
+          type: array
+          items:
+            type: string
+        estimated_resources:
+          type: object
+          additionalProperties: true
+      required:
+      - valid
+      additionalProperties: true
+      description: Non-mutating validation result. `valid` is suite-standard; remaining fields describe per-service
+        diagnostics.
+    OpalProfile:
+      type: object
+      properties:
+        id:
+          description: Opaque profile identifier; string or integer per service.
+        name:
+          type: string
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+        is_active:
+          type: boolean
+        voice_id:
+          type: string
+        speed:
+          type: number
+          format: float
+        volume:
+          type: number
+          format: float
+        output_format:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+        sample_rate:
+          anyOf:
+          - type: integer
+          - type: 'null'
+        engine_options:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        wakeword_names:
+          items:
+            type: string
+          type: array
+          title: Wakeword Names
+        confidence_thresholds:
+          additionalProperties: true
+          type: object
+          title: Confidence Thresholds
+        vad_settings:
+          additionalProperties: true
+          type: object
+          title: Vad Settings
+        enabled_intents:
+          items:
+            type: string
+          type: array
+          title: Enabled Intents
+        enabled_slots:
+          items:
+            type: string
+          type: array
+          title: Enabled Slots
+        model_paths:
+          additionalProperties:
+            type: string
+          type: object
+          title: Model Paths
+        pipeline_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        inference:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+        retention:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+      required:
+      - id
+      - is_active
+      - name
+      additionalProperties: true
+      description: A reusable named generation/processing profile. `id`, `name` and `is_active` are suite-standard;
+        all other fields are service-defined. Exactly one profile may be active at a time.
+    OpalProfileCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Unique or human-distinguishable profile name.
+          example: default
+        description:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+        is_active:
+          type: boolean
+          default: false
+          description: If true, activate this profile and deactivate all others.
+        voice_id:
+          type: string
+          minLength: 1
+          description: Registered voice used by default for this profile.
+          example: en-us-lessac-medium
+        speed:
+          type: number
+          format: float
+          minimum: 0.25
+          maximum: 4.0
+          default: 1.0
+        volume:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 2.0
+          default: 1.0
+        output_format:
+          allOf:
+          - type: object
+            additionalProperties: true
+            description: Service-defined section.
+          default: wav
+          description: Default format for completed `/generate` requests using this profile.
+        sample_rate:
+          anyOf:
+          - type: integer
+            minimum: 8000
+            maximum: 192000
+          - type: 'null'
+          default: null
+          description: Optional default output sample rate. Null lets the service choose.
+        engine_options:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+        wakeword_names:
+          items:
+            type: string
+          type: array
+          title: Wakeword Names
+          default: []
+        confidence_thresholds:
+          additionalProperties: true
+          type: object
+          title: Confidence Thresholds
+          default: {}
+        vad_settings:
+          additionalProperties: true
+          type: object
+          title: Vad Settings
+          default: {}
+        enabled_intents:
+          items:
+            type: string
+          type: array
+          title: Enabled Intents
+          default: []
+        enabled_slots:
+          items:
+            type: string
+          type: array
+          title: Enabled Slots
+          default: []
+        model_paths:
+          additionalProperties:
+            type: string
+          type: object
+          title: Model Paths
+          default: {}
+        id:
+          description: Client-supplied profile identifier where supported; string or integer per service.
+        pipeline_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        inference:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+        retention:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+      required:
+      - name
+      additionalProperties: true
+      description: 'Profile creation request. `name` is required; `is_active: true` activates the new profile and
+        deactivates all others.'
+    OpalProfilePatch:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+        is_active:
+          type: boolean
+          description: Setting true activates this profile and deactivates all others.
+        voice_id:
+          type: string
+          minLength: 1
+        speed:
+          type: number
+          format: float
+          minimum: 0.25
+          maximum: 4.0
+        volume:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 2.0
+        output_format:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+        sample_rate:
+          anyOf:
+          - type: integer
+            minimum: 8000
+            maximum: 192000
+          - type: 'null'
+        engine_options:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+        wakeword_names:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Wakeword Names
+        confidence_thresholds:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Confidence Thresholds
+        vad_settings:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Vad Settings
+        enabled_intents:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Enabled Intents
+        enabled_slots:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Enabled Slots
+        model_paths:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Model Paths
+        pipeline_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        inference:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+        retention:
+          type: object
+          additionalProperties: true
+          description: Service-defined section.
+      required: []
+      additionalProperties: true
+      description: Partial profile update; only supplied fields change.
+    OpalEngine:
+      type: object
+      properties:
+        engine_id:
+          type: string
+          minLength: 1
+          description: Stable engine identifier used by API requests and voice registrations.
+          example: piper
+        name:
+          type: string
+          minLength: 1
+          description: Human-readable engine name.
+          example: Piper
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Optional human-readable engine description.
+          example: Local neural text-to-speech engine
+        enabled:
+          type: boolean
+          description: Whether OPAL Say is administratively allowed to route generation to this engine.
+          example: true
+        available:
+          type: boolean
+          description: Whether the implementation can currently initialize and use the engine.
+          example: true
+        options:
+          type: object
+          additionalProperties: true
+          description: Engine-specific option values.
+        metadata:
+          type: object
+          additionalProperties: true
+          readOnly: true
+          description: 'Read-only implementation-reported engine metadata such as runtime version or
+
+            adapter information. Clients must not require engine-specific metadata keys.
+
+            '
+          example:
+            version: 1.3.0
+        version:
+          type: string
+        state:
+          type: string
+          enum:
+          - ready
+          - unavailable
+          - error
+          - disabled
+        tasks:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: Service-defined section.
+        device_types:
+          type: array
+          items:
+            type: string
+        options_schema:
+          type: object
+          additionalProperties: true
+      required:
+      - enabled
+      - engine_id
+      - name
+      additionalProperties: true
+      description: A host-installed engine known to the service. `engine_id`, `name` and `enabled` are suite-standard;
+        `available` reports live usability. Engines are not created or deleted through this API.
+    OpalEnginePatch:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: Enable or disable routing to this installed engine.
+        options:
+          type: object
+          additionalProperties: true
+          description: Engine-specific option values.
+      required: []
+      additionalProperties: true
+      description: Partial engine configuration update; only supplied fields change.
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Optional on loopback deployments; required on non-loopback interfaces. Bearer credentials are
+        configured via token_env. Correlation headers are transport context, never authorization credentials.
+  pathItems:
+    health:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - health
+        summary: Service health report
+        operationId: opal_health_get
+        description: Aggregate health report for the service and its dependencies. The only suite-standard member
+          is `status`; all other sections are service-defined.
+        responses:
+          '200':
+            description: Service health report.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalHealthReport'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '503':
+            $ref: '#/components/responses/ServiceUnavailable'
+    health_live:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - health
+        summary: Liveness probe
+        operationId: opal_health_live_get
+        description: 'Cheap liveness check: the process is up and its minimal runtime is reachable.'
+        responses:
+          '200':
+            description: Health probe.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalHealthProbe'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '503':
+            description: Probe unavailable; status=unavailable and ready=false.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalHealthProbe'
+    health_ready:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - health
+        summary: Readiness probe
+        operationId: opal_health_ready_get
+        description: 'Readiness check: the service can accept traffic because every required dependency is initialized
+          and reachable.'
+        responses:
+          '200':
+            description: Health probe.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalHealthProbe'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '503':
+            description: Probe unavailable; status=unavailable and ready=false.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalHealthProbe'
+    settings_collection:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - settings
+        summary: List settings
+        operationId: opal_settings_get
+        description: Return the complete portable settings map with values; never returns secret material. ETag
+          carries the current revision for subsequent If-Match writes.
+        responses:
+          '200':
+            description: Portable settings map.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+              ETag:
+                $ref: '#/components/headers/ETag'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalSettingsMap'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+      patch:
+        tags:
+        - settings
+        summary: Patch settings
+        operationId: opal_settings_patch
+        description: Atomically apply a partial update to the portable settings map. Strong If-Match is mandatory.
+        parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalSettingsMap'
+        responses:
+          '200':
+            description: Updated settings map.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+              ETag:
+                $ref: '#/components/headers/ETag'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalSettingsMap'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '409':
+            $ref: '#/components/responses/Conflict'
+          '412':
+            $ref: '#/components/responses/PreconditionFailed'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '428':
+            $ref: '#/components/responses/PreconditionRequired'
+    settings_key:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      - $ref: '#/components/parameters/SettingKey'
+      get:
+        tags:
+        - settings
+        summary: Get setting
+        operationId: opal_setting_get
+        description: Return a single setting key/value pair.
+        responses:
+          '200':
+            description: Setting value.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/SettingRead'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+      put:
+        tags:
+        - settings
+        summary: Set setting
+        operationId: opal_setting_put
+        description: Create or replace one setting value. Strong If-Match is mandatory.
+        parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingUpdate'
+        responses:
+          '200':
+            description: Updated setting.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/SettingRead'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '409':
+            $ref: '#/components/responses/Conflict'
+          '412':
+            $ref: '#/components/responses/PreconditionFailed'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '428':
+            $ref: '#/components/responses/PreconditionRequired'
+      delete:
+        tags:
+        - settings
+        summary: Delete setting
+        operationId: opal_setting_delete
+        description: Remove one setting key and revert it to its implementation default. Strong If-Match is mandatory.
+        parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        responses:
+          '204':
+            description: Setting removed.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '409':
+            $ref: '#/components/responses/Conflict'
+          '412':
+            $ref: '#/components/responses/PreconditionFailed'
+          '428':
+            $ref: '#/components/responses/PreconditionRequired'
+    backup_create:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      post:
+        tags:
+        - backup
+        summary: Create backup
+        operationId: opal_backup_create
+        description: Write a timestamped archive of the current logical configuration to the service's backup directory.
+        responses:
+          '201':
+            description: Backup created.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+              Location:
+                $ref: '#/components/headers/Location'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalBackupCreateResponse'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '500':
+            $ref: '#/components/responses/OperationFailed'
+    backup_list:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - backup
+        summary: List backups
+        operationId: opal_backup_list
+        description: List backup archives managed by this service instance.
+        responses:
+          '200':
+            description: Known backups.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/OpalBackupInfo'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+    backup_download:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      - $ref: '#/components/parameters/BackupFilename'
+      get:
+        tags:
+        - backup
+        summary: Download backup
+        operationId: opal_backup_download
+        description: Download one service-managed backup archive.
+        responses:
+          '200':
+            description: Backup archive.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/octet-stream:
+                schema:
+                  type: string
+                  format: binary
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+    backup_delete:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      - $ref: '#/components/parameters/BackupFilename'
+      delete:
+        tags:
+        - backup
+        summary: Delete backup
+        operationId: opal_backup_delete
+        description: Delete a named backup file managed by this service.
+        responses:
+          '204':
+            description: Backup deleted.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+    backup_export:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - backup
+        summary: Export configuration
+        operationId: opal_backup_export
+        description: 'Export the full logical service configuration as JSON. The bundle describes portable configuration
+          only: it never embeds secrets, binaries, model files, or history.'
+        responses:
+          '200':
+            description: Logical service configuration.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalConfigExport'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '500':
+            $ref: '#/components/responses/OperationFailed'
+    backup_import:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      post:
+        tags:
+        - backup
+        summary: Import configuration
+        operationId: opal_backup_import
+        parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        description: 'Atomically import a logical configuration bundle. Validation runs before application; the
+          import is applied as a single atomic operation and a failed import leaves the previous configuration intact.
+          Omit the body to import the implementation''s `./config/` file set. Strong If-Match is mandatory: 428
+          when the precondition is missing, 412 when the supplied precondition is stale.'
+        requestBody:
+          required: false
+          content:
+            application/json:
+              schema:
+                anyOf:
+                - $ref: '#/components/schemas/OpalConfigExport'
+                - type: 'null'
+                description: Bundle to import; omit to use ./config/
+        responses:
+          '200':
+            description: Import result.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalImportResult'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '409':
+            $ref: '#/components/responses/Conflict'
+          '412':
+            $ref: '#/components/responses/PreconditionFailed'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '428':
+            $ref: '#/components/responses/PreconditionRequired'
+          '500':
+            $ref: '#/components/responses/OperationFailed'
+    backup_restore:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      - $ref: '#/components/parameters/BackupFilename'
+      post:
+        tags:
+        - backup
+        summary: Restore backup
+        operationId: opal_backup_restore
+        parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        description: 'Atomically restore a named service-managed backup. Validation runs before application; the
+          restore is applied as a single atomic operation and a failed restore leaves the previous configuration
+          intact. Strong If-Match is mandatory: 428 when the precondition is missing, 412 when the supplied precondition
+          is stale.'
+        responses:
+          '200':
+            description: Restore result.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalImportResult'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '409':
+            $ref: '#/components/responses/Conflict'
+          '412':
+            $ref: '#/components/responses/PreconditionFailed'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '428':
+            $ref: '#/components/responses/PreconditionRequired'
+          '500':
+            $ref: '#/components/responses/OperationFailed'
+    backup_validate_post:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      post:
+        tags:
+        - backup
+        summary: Validate configuration
+        operationId: opal_backup_validate_post
+        description: Validate a configuration bundle without applying it.
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalConfigExport'
+        responses:
+          '200':
+            description: Validation report.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalValidationReport'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+    backup_validate:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      post:
+        tags:
+        - backup
+        summary: Validate configuration
+        operationId: opal_backup_validate
+        description: Validate a configuration bundle without applying it.
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalConfigExport'
+        responses:
+          '200':
+            description: Validation report.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalValidationReport'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+      get:
+        tags:
+        - backup
+        summary: Validate stored configuration
+        operationId: opal_backup_validate_stored
+        description: Validate the configuration currently staged in the implementation's `./config/` file set without
+          applying it.
+        responses:
+          '200':
+            description: Validation report.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalValidationReport'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+    profiles_collection:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - profiles
+        summary: List profiles
+        operationId: opal_profiles_list
+        description: Return the complete bounded profile collection; pagination is not supported. An implementation
+          may reject catalog sizes over an advertised deployment cap rather than silently truncate.
+        responses:
+          '200':
+            description: Configured profiles.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+              ETag:
+                $ref: '#/components/headers/ETag'
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/OpalProfile'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+      post:
+        tags:
+        - profiles
+        summary: Create profile
+        operationId: opal_profiles_create
+        description: Create a reusable named profile. If `is_active` is true, the new profile becomes the only active
+          profile. Strong If-Match on the current collection revision is mandatory.
+        parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalProfileCreate'
+        responses:
+          '201':
+            description: Profile created.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+              Location:
+                $ref: '#/components/headers/Location'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalProfile'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '409':
+            $ref: '#/components/responses/Conflict'
+          '412':
+            $ref: '#/components/responses/PreconditionFailed'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '428':
+            $ref: '#/components/responses/PreconditionRequired'
+    profile_item:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      - $ref: '#/components/parameters/ProfileId'
+      get:
+        tags:
+        - profiles
+        summary: Get profile
+        operationId: opal_profile_get
+        description: Return one profile.
+        responses:
+          '200':
+            description: Profile.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+              ETag:
+                $ref: '#/components/headers/ETag'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalProfile'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+      patch:
+        tags:
+        - profiles
+        summary: Update profile
+        operationId: opal_profile_patch
+        description: Partially update one profile. Strong If-Match is mandatory.
+        parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalProfilePatch'
+        responses:
+          '200':
+            description: Updated profile.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+              ETag:
+                $ref: '#/components/headers/ETag'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalProfile'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '409':
+            $ref: '#/components/responses/Conflict'
+          '412':
+            $ref: '#/components/responses/PreconditionFailed'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '428':
+            $ref: '#/components/responses/PreconditionRequired'
+      delete:
+        tags:
+        - profiles
+        summary: Delete profile
+        operationId: opal_profile_delete
+        description: Delete one profile. The active profile cannot be deleted. Strong If-Match is mandatory.
+        parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        responses:
+          '204':
+            description: Profile deleted.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '409':
+            $ref: '#/components/responses/Conflict'
+          '412':
+            $ref: '#/components/responses/PreconditionFailed'
+          '428':
+            $ref: '#/components/responses/PreconditionRequired'
+    profile_activate:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      - $ref: '#/components/parameters/ProfileId'
+      post:
+        tags:
+        - profiles
+        summary: Activate profile
+        operationId: opal_profile_activate
+        description: Make this profile the only active profile. Strong If-Match is mandatory.
+        parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        responses:
+          '200':
+            description: Activated profile.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalProfile'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '409':
+            $ref: '#/components/responses/Conflict'
+          '412':
+            $ref: '#/components/responses/PreconditionFailed'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '428':
+            $ref: '#/components/responses/PreconditionRequired'
+    engines_collection:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - engines
+        summary: List engines
+        operationId: opal_engines_list
+        description: Return all engines known to the service implementation. An engine can be known but unavailable.
+          `enabled` is administrative configuration; `available` reports whether the implementation can currently
+          use the engine. Returns the complete bounded catalog; pagination is not supported.
+        responses:
+          '200':
+            description: Known engines.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/OpalEngine'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+    engine_item:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      - $ref: '#/components/parameters/EngineId'
+      get:
+        tags:
+        - engines
+        summary: Get engine
+        operationId: opal_engine_get
+        description: Return one engine.
+        responses:
+          '200':
+            description: Engine.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+              ETag:
+                $ref: '#/components/headers/ETag'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalEngine'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+      patch:
+        tags:
+        - engines
+        summary: Update engine
+        operationId: opal_engine_patch
+        description: Partially update engine configuration. Strong If-Match is mandatory.
+        parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalEnginePatch'
+        responses:
+          '200':
+            description: Updated engine.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+              ETag:
+                $ref: '#/components/headers/ETag'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalEngine'
+          '404':
+            $ref: '#/components/responses/NotFound'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '409':
+            $ref: '#/components/responses/Conflict'
+          '412':
+            $ref: '#/components/responses/PreconditionFailed'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '428':
+            $ref: '#/components/responses/PreconditionRequired'

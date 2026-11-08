@@ -1,7 +1,8 @@
 # OPAL-THINK project notes
 
-- Contract is authoritative: `opal_think.v1.4.0.yaml` (vendored at
-  `src/opal_think/contract/opal_think.yaml`). Do not silently change public API behavior.
+- Contract is authoritative: `openapi/opal_think_v1.5.0.yaml` (+ `openapi/shared/opal_kernel.yaml`;
+  vendored byte-identical at `src/opal_think/contract/opal_think.yaml` and `contract/shared/opal_kernel.yaml`).
+  Do not silently change public API behavior.
 - Stack: FastAPI + Pydantic v2 + Typer + HTTPX, asyncio, SQLite, src layout. Mirrors `../opal-event` conventions.
 - Install: `uv venv && uv pip install -e ".[dev]"`
 - Test: `pytest` (pytest-asyncio auto). Lint: `ruff check .` (line-length 130, py311).
