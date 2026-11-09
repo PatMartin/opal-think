@@ -66,16 +66,16 @@ def test_settings_set_and_remove(api) -> None:
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["value"] == 8
     # server actually persisted it (proves the ETag auto-fetch worked)
-    assert api.get("/api/v1/settings/task.max_concurrent").json()["value"] == 8
+    assert api.get("/api/v1/setting/task.max_concurrent").json()["value"] == 8
     result = runner.invoke(cli_main.think_app, ["settings", "remove", "task.max_concurrent"])
     assert result.exit_code == 0
-    assert api.get("/api/v1/settings/task.max_concurrent").json()["value"] == 4
+    assert api.get("/api/v1/setting/task.max_concurrent").json()["value"] == 4
 
 
 def test_settings_set_string_value(api) -> None:
     result = runner.invoke(cli_main.think_app, ["settings", "set", "models.default_id", "ollama:llama3.2"])
     assert result.exit_code == 0
-    assert api.get("/api/v1/settings/models.default_id").json()["value"] == "ollama:llama3.2"
+    assert api.get("/api/v1/setting/models.default_id").json()["value"] == "ollama:llama3.2"
 
 
 def test_settings_error_exit(api) -> None:

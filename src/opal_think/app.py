@@ -1,6 +1,6 @@
 """FastAPI application factory: middleware, exception handlers, router wiring.
 
-Every error response uses the nested ``OpalError`` envelope per ``openapi/opal_think_v1.5.0.yaml``;
+Every error response uses the nested ``OpalError`` envelope per ``openapi/opal_think_v1.6.0.yaml``;
 correlation headers are applied to all responses by :class:`OpalContextMiddleware`.
 """
 
@@ -23,7 +23,7 @@ from opal_think.errors import OpalHTTPException
 from opal_think.event_client import build_event_client
 from opal_think.opal_context import OpalContextMiddleware, get_opal_context
 from opal_think.providers.registry import ProviderRegistry
-from opal_think.routers import health, models, sessions, settings, tasks
+from opal_think.routers import health, info, models, personas, sessions, settings, tasks
 from opal_think.settings_registry import SettingsRegistry, SettingsStore
 from opal_think.store import ThinkStore
 
@@ -120,10 +120,12 @@ def create_app(config: ThinkConfig | None = None) -> FastAPI:
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
     app.include_router(health.router, dependencies=[Depends(require_auth)])
+    app.include_router(info.router, dependencies=[Depends(require_auth)])
     app.include_router(settings.router, dependencies=[Depends(require_auth)])
     app.include_router(sessions.router, dependencies=[Depends(require_auth)])
     app.include_router(models.router, dependencies=[Depends(require_auth)])
     app.include_router(tasks.router, dependencies=[Depends(require_auth)])
+    app.include_router(personas.router, dependencies=[Depends(require_auth)])
 
     spa_index = Path(__file__).resolve().parent / "spa" / "index.html"
     if spa_index.is_file():

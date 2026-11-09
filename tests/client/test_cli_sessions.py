@@ -51,7 +51,7 @@ def test_session_add_list_show_remove(api) -> None:
 
     result = runner.invoke(cli_main.think_app, ["session", "remove", session_id])
     assert result.exit_code == 0
-    assert api.get(f"/api/v1/sessions/{session_id}").status_code == 404
+    assert api.get(f"/api/v1/session/{session_id}").status_code == 404
 
 
 def test_session_add_json(api) -> None:

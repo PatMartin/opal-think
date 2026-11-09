@@ -27,7 +27,7 @@ def _fake(client: TestClient):
 def _wait_terminal(client: TestClient, task_id: str, seconds: float = 10.0) -> dict:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        task = client.get(f"/api/v1/tasks/{task_id}").json()
+        task = client.get(f"/api/v1/task/{task_id}").json()
         if task["status"] in {"completed", "failed", "cancelled", "timed_out"}:
             return task
         time.sleep(0.05)
@@ -55,7 +55,7 @@ def test_absolute_deadline_bounds_all_steps(task_client: TestClient) -> None:
     fake.set_script(script)
     started = time.monotonic()
     task_id = task_client.post(
-        "/api/v1/tasks/", json={"prompt": "multi", "model_id": "fake:script", "timeout_seconds": 1}
+        "/api/v1/task/", json={"prompt": "multi", "model_id": "fake:script", "timeout_seconds": 1}
     ).json()["id"]
     task = _wait_terminal(task_client, task_id)
     elapsed = time.monotonic() - started
@@ -71,10 +71,10 @@ def test_cancel_during_event_poll(task_client: TestClient) -> None:
     task_client.app.state.event_client = event
     fake.set_script([Generation("", tool_calls=[ToolCallRequest("gpu_diagnostics", {"topic": "t", "data": {}})])])
     task_id = task_client.post(
-        "/api/v1/tasks/", json={"prompt": "x", "model_id": "fake:script"}
+        "/api/v1/task/", json={"prompt": "x", "model_id": "fake:script"}
     ).json()["id"]
     time.sleep(0.3)  # let it reach the poll loop
-    assert task_client.post(f"/api/v1/tasks/{task_id}/cancel").status_code == 202
+    assert task_client.post(f"/api/v1/task/{task_id}/cancel").status_code == 202
     task = _wait_terminal(task_client, task_id, seconds=4)
     assert task["status"] == "cancelled"
 
@@ -82,7 +82,7 @@ def test_cancel_during_event_poll(task_client: TestClient) -> None:
 def test_single_terminal_frame_on_cancel(task_client: TestClient) -> None:
     fake = _fake(task_client)
     fake.delay = 3.0
-    task_id = task_client.post("/api/v1/tasks/", json={"prompt": "slow"}).json()["id"]
+    task_id = task_client.post("/api/v1/task/", json={"prompt": "slow"}).json()["id"]
     time.sleep(0.1)
     import threading
 
@@ -90,14 +90,14 @@ def test_single_terminal_frame_on_cancel(task_client: TestClient) -> None:
     done = threading.Event()
 
     def watch():
-        with task_client.stream("GET", f"/api/v1/tasks/{task_id}/stream") as response:
+        with task_client.stream("GET", f"/api/v1/task/{task_id}/stream") as response:
             frames_holder.extend(_frames(response))
         done.set()
 
     thread = threading.Thread(target=watch, daemon=True)
     thread.start()
     time.sleep(0.3)
-    task_client.post(f"/api/v1/tasks/{task_id}/cancel")
+    task_client.post(f"/api/v1/task/{task_id}/cancel")
     assert done.wait(6)
     cancelled = [f for f in frames_holder if f["type"] == "task.cancelled"]
     assert len(cancelled) == 1, f"expected exactly one terminal frame: {frames_holder}"
@@ -105,7 +105,7 @@ def test_single_terminal_frame_on_cancel(task_client: TestClient) -> None:
 
 
 def test_terminal_task_unaffected_by_late_cancel_flag(task_client: TestClient) -> None:
-    task_id = task_client.post("/api/v1/tasks/", json={"prompt": "quick"}).json()["id"]
+    task_id = task_client.post("/api/v1/task/", json={"prompt": "quick"}).json()["id"]
     task = _wait_terminal(task_client, task_id)
     assert task["status"] == "completed"
     # router returns 409 on terminal; even a direct flag attempt cannot resurrect

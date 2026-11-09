@@ -1,8 +1,8 @@
 """OPAL-EVENT REST adapter — the only path by which THINK may act on the world.
 
 THINK holds *execute-scoped* privileges per the ratified design: it lists/shows enabled
-actions, invokes ``POST /api/v1/actions/{id}/execute``, and polls ``GET
-/api/v1/executions/{id}`` until terminal. It MUST NOT administer actions, rules, settings,
+actions, invokes ``POST /api/v1/action/{id}/execute``, and polls ``GET
+/api/v1/execution/{id}`` until terminal. It MUST NOT administer actions, rules, settings,
 or credentials — this module deliberately exposes no such methods.
 
 Correlation: outbound calls carry a fresh hop request (EVENT mints its own request id),
@@ -145,17 +145,17 @@ class HttpEventClient:
         return response
 
     async def list_actions(self, context: dict[str, str | None]) -> list[dict[str, Any]]:
-        data = (await self._call("GET", "/api/v1/actions/", context)).json()
+        data = (await self._call("GET", "/api/v1/action/", context)).json()
         return data.get("items", data) if isinstance(data, dict) else data
 
     async def execute(self, action_id: str, event: dict[str, Any], context: dict[str, str | None]) -> dict[str, Any]:
         """Enqueue one execution; the 202 Execution record is admission, not outcome."""
         return (
-            await self._call("POST", f"/api/v1/actions/{action_id}/execute", context, json={"event": event})
+            await self._call("POST", f"/api/v1/action/{action_id}/execute", context, json={"event": event})
         ).json()
 
     async def get_execution(self, execution_id: str, context: dict[str, str | None]) -> dict[str, Any]:
-        return (await self._call("GET", f"/api/v1/executions/{execution_id}", context)).json()
+        return (await self._call("GET", f"/api/v1/execution/{execution_id}", context)).json()
 
 
 class FakeEventClient:

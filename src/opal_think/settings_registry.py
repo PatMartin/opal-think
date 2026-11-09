@@ -143,11 +143,22 @@ class RevisionConflict(Exception):
         self.actual = actual
 
 
-class SettingsStore:
-    """SQLite-backed override store with a global revision and per-key revisions.
+class PersonaExists(Exception):
+    """Persona create collided with an already-registered persona_id (409)."""
 
-    Only overrides are persisted; defaults live in the registry. All writes take a short
-    exclusive lock and a single transaction, so multi-key patches are atomic.
+
+class PersonaMissing(Exception):
+    """Persona addressed by a mutation is not registered (404)."""
+
+
+class SettingsStore:
+    """SQLite-backed portable-configuration store with a global revision and per-key revisions.
+
+    Only setting *overrides* are persisted; defaults live in the registry. The ``personas``
+    table shares the same global revision: personas are part of the logical portable
+    configuration, so persona mutations bump it and accept the same ``"s<n>"`` ETags.
+    All writes take a short exclusive lock and a single transaction, so multi-key patches
+    and preconditioned persona mutations are atomic.
     """
 
     def __init__(self, db_path: Path) -> None:
@@ -159,6 +170,11 @@ class SettingsStore:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS settings ("
                 "key TEXT PRIMARY KEY, value TEXT NOT NULL, revision INTEGER NOT NULL, updated_at TEXT NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS personas ("
+                "persona_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, voice_id TEXT,"
+                " enabled INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
             )
             conn.execute("INSERT OR IGNORE INTO meta (name, value) VALUES ('revision', '0')")
 
@@ -263,6 +279,95 @@ class SettingsStore:
     def reset(self, key: str) -> int:
         """Remove an override (restore default); returns the new global revision."""
         return self.reset_checked(key)
+
+    # -- personas (v1.6.0; share the global config revision) ---------------------------------------------
+
+    @staticmethod
+    def _persona_row(row: sqlite3.Row | tuple | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        data = dict(row)
+        data["enabled"] = bool(data["enabled"])
+        return data
+
+    def list_personas(self, enabled: bool | None = None) -> list[dict[str, Any]]:
+        """Complete bounded catalog ordered by persona_id; optional enabled filter."""
+        sql, params = "SELECT * FROM personas WHERE 1 = 1", []
+        if enabled is not None:
+            sql, params = "SELECT * FROM personas WHERE enabled = ?", [int(enabled)]
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(sql + " ORDER BY persona_id", params).fetchall()
+        return [self._persona_row(r) for r in rows]
+
+    def get_persona(self, persona_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            return self._persona_row(
+                conn.execute("SELECT * FROM personas WHERE persona_id = ?", (persona_id,)).fetchone()
+            )
+
+    def insert_persona_checked(
+        self, persona: dict[str, Any], *, expect_global: int | None = None, max_count: int = 10_000
+    ) -> int:
+        """Insert a persona row; bumps the global revision. ``PersonaExists`` on
+        duplicate id or a full catalog; ``RevisionConflict`` on stale ETag."""
+
+        def write(conn: sqlite3.Connection) -> int:
+            if conn.execute("SELECT 1 FROM personas WHERE persona_id = ?", (persona["persona_id"],)).fetchone():
+                raise PersonaExists(persona["persona_id"])
+            if conn.execute("SELECT COUNT(*) FROM personas").fetchone()[0] >= max_count:
+                raise PersonaExists("persona catalog is full")
+            revision = self._bump(conn)
+            conn.execute(
+                "INSERT INTO personas (persona_id, name, description, voice_id, enabled, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (
+                    persona["persona_id"],
+                    persona["name"],
+                    persona.get("description"),
+                    persona.get("voice_id"),
+                    int(persona["enabled"]),
+                    persona["created_at"],
+                    persona["updated_at"],
+                ),
+            )
+            return revision
+
+        return self._checked_write(write, expect_global=expect_global)
+
+    def update_persona_checked(
+        self, persona_id: str, changes: dict[str, Any], *, expect_global: int | None = None
+    ) -> int:
+        """Apply a partial update; bumps the global revision. ``PersonaMissing`` on
+        unknown id; ``RevisionConflict`` on stale ETag."""
+
+        def write(conn: sqlite3.Connection) -> int:
+            if conn.execute("SELECT 1 FROM personas WHERE persona_id = ?", (persona_id,)).fetchone() is None:
+                raise PersonaMissing(persona_id)
+            revision = self._bump(conn)
+            if "enabled" in changes:
+                changes["enabled"] = int(changes["enabled"])
+            assignments = ", ".join(f"{field} = ?" for field in (*changes, "updated_at"))
+            conn.execute(
+                f"UPDATE personas SET {assignments} WHERE persona_id = ?",
+                [*changes.values(), _now(), persona_id],
+            )
+            return revision
+
+        return self._checked_write(write, expect_global=expect_global)
+
+    def delete_persona_checked(self, persona_id: str, *, expect_global: int | None = None) -> int:
+        """Delete a persona row; bumps the global revision. ``PersonaMissing`` on
+        unknown id; ``RevisionConflict`` on stale ETag."""
+
+        def write(conn: sqlite3.Connection) -> int:
+            cursor = conn.execute("DELETE FROM personas WHERE persona_id = ?", (persona_id,))
+            if cursor.rowcount == 0:
+                raise PersonaMissing(persona_id)
+            return self._bump(conn)
+
+        return self._checked_write(write, expect_global=expect_global)
 
 
 class SettingsRegistry:

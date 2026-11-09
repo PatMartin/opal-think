@@ -7,7 +7,7 @@ Configuration sources:
   raw secret material.
 
 Portable runtime settings (provider URLs, task ceilings, retention) are managed through the
-REST ``/api/v1/settings/`` surface implemented by the settings registry, not this bootstrap config.
+REST ``/api/v1/setting/`` surface implemented by the settings registry, not this bootstrap config.
 """
 
 from __future__ import annotations

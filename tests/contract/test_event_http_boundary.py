@@ -3,7 +3,7 @@
 Unlike ``test_event_integration.py`` — which injects ``FakeEventClient`` at
 ``app.state.event_client`` — every case here drives::
 
-    POST /api/v1/tasks/  ->  engine  ->  HttpEventClient  ->  httpx.MockTransport
+    POST /api/v1/task/  ->  engine  ->  HttpEventClient  ->  httpx.MockTransport
         ->  tests.mock_http_event.MockEventApi  (released opal_event.1.4.0 surface)
 
 so request shape, correlation/auth headers, admission->poll sequencing, error
@@ -63,7 +63,7 @@ def _wire_event(task_client: TestClient, api: MockEventApi, credential_ref: str 
 def _wait_terminal(client: TestClient, task_id: str, seconds: float = 5.0) -> dict:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        task = client.get(f"/api/v1/tasks/{task_id}").json()
+        task = client.get(f"/api/v1/task/{task_id}").json()
         if task["status"] in {"completed", "failed", "cancelled", "timed_out"}:
             return task
         time.sleep(0.05)
@@ -73,7 +73,7 @@ def _wait_terminal(client: TestClient, task_id: str, seconds: float = 5.0) -> di
 def _script_task(client: TestClient, script: list[Generation], headers: dict | None = None) -> dict:
     _fake(client).set_script(script)
     task_id = client.post(
-        "/api/v1/tasks/", json={"prompt": "diagnose the gpu", "model_id": "fake:script"}, headers=headers or {}
+        "/api/v1/task/", json={"prompt": "diagnose the gpu", "model_id": "fake:script"}, headers=headers or {}
     ).json()["id"]
     return _wait_terminal(client, task_id)
 
@@ -118,12 +118,12 @@ def test_round_trip_over_http_boundary(task_client: TestClient) -> None:
     assert step["status"] == "succeeded" and step["execution_id"] == "exec_1"
     # the wire exchange actually happened: list -> execute -> polls to terminal
     assert [r["path"] for r in api.requests] == [
-        "/api/v1/actions/",
-        "/api/v1/actions/gpu_diagnostics/execute",
-        "/api/v1/executions/exec_1",
-        "/api/v1/executions/exec_1",
+        "/api/v1/action/",
+        "/api/v1/action/gpu_diagnostics/execute",
+        "/api/v1/execution/exec_1",
+        "/api/v1/execution/exec_1",
     ]
-    post = _requests(api, "POST", "/api/v1/actions/")[0]
+    post = _requests(api, "POST", "/api/v1/action/")[0]
     assert post["json"] == {"event": {"topic": "gpu.diag", "data": {"level": 1}}}
     payload = json.loads(_tool_msg(task_client)["content"])
     assert payload["status"] == "succeeded"
@@ -159,7 +159,7 @@ def test_fixture_parity_with_released_event_contract(task_client: TestClient) ->
         jsonschema.validate(poll["response_json"], EXECUTION_SCHEMA)
     assert polls[-1]["response_json"]["status"] in {"succeeded", "failed", "timed_out", "dropped"}
     # error path emits the OpalError envelope
-    error = api.handler(httpx.Request("POST", "http://event.test/api/v1/actions/nope/execute", json={"event": {}}))
+    error = api.handler(httpx.Request("POST", "http://event.test/api/v1/action/nope/execute", json={"event": {}}))
     assert error.status_code == 404
     assert set(error.json()["error"]) >= OPAL_ERROR_REQUIRED
 
@@ -205,7 +205,7 @@ def test_client_side_schema_check_never_reaches_wire(task_client: TestClient) ->
     assert task["status"] == "completed"
     step = next(s for s in task["steps"] if s["kind"] == "action")
     assert step["status"] == "failed" and "input_schema" in step["summary"]
-    assert _requests(api, "POST", "/api/v1/actions/") == []  # rejected before the wire
+    assert _requests(api, "POST", "/api/v1/action/") == []  # rejected before the wire
     assert "invalid_arguments" in _tool_msg(task_client)["content"]
 
 
@@ -221,7 +221,7 @@ def test_server_side_rejection_422_flows_back(task_client: TestClient) -> None:
         ],
     )
     assert task["status"] == "completed"  # rejection is feedback, not task failure
-    assert len(_requests(api, "POST", "/api/v1/actions/")) == 1  # it did reach the wire
+    assert len(_requests(api, "POST", "/api/v1/action/")) == 1  # it did reach the wire
     step = next(s for s in task["steps"] if s["kind"] == "action")
     assert step["status"] == "failed" and "validation_error" in step["summary"]
     content = _tool_msg(task_client)["content"]
@@ -233,7 +233,7 @@ def test_event_unavailable_at_discovery_degrades_to_model_only(task_client: Test
     _wire_event(task_client, api)
     task = _script_task(task_client, [Generation("answering without tools")])
     assert task["status"] == "completed" and task["answer"] == "answering without tools"
-    assert [r["path"] for r in api.requests] == ["/api/v1/actions/"]  # discovery tried once
+    assert [r["path"] for r in api.requests] == ["/api/v1/action/"]  # discovery tried once
     assert _fake(task_client).calls[-1].get("tools") is None  # no tools offered
 
 
@@ -262,7 +262,7 @@ def test_malformed_admission_fails_step_not_task(task_client: TestClient, payloa
     step = next(s for s in task["steps"] if s["kind"] == "action")
     assert step["status"] == "failed" and "execution id" in step["summary"]
     assert "event_protocol_error" in _tool_msg(task_client)["content"]
-    assert _requests(api, "GET", "/api/v1/executions/") == []  # nothing to poll
+    assert _requests(api, "GET", "/api/v1/execution/") == []  # nothing to poll
 
 
 def test_transient_poll_failure_fails_task_cleanly(task_client: TestClient) -> None:
@@ -275,7 +275,7 @@ def test_transient_poll_failure_fails_task_cleanly(task_client: TestClient) -> N
     )
     assert task["status"] == "failed"
     assert task["error"]["code"] == "event_unavailable"
-    assert len(_requests(api, "GET", "/api/v1/executions/")) == 1
+    assert len(_requests(api, "GET", "/api/v1/execution/")) == 1
 
 
 def test_unknown_execution_status_fails_step_fast(task_client: TestClient) -> None:
@@ -290,7 +290,7 @@ def test_unknown_execution_status_fails_step_fast(task_client: TestClient) -> No
     step = next(s for s in task["steps"] if s["kind"] == "action")
     assert step["status"] == "failed" and "unrecognized execution status" in step["summary"]
     assert "event_protocol_error" in _tool_msg(task_client)["content"]
-    assert len(_requests(api, "GET", "/api/v1/executions/")) == 1  # failed fast, no poll spin
+    assert len(_requests(api, "GET", "/api/v1/execution/")) == 1  # failed fast, no poll spin
 
 
 def test_exchange_confined_to_documented_event_surface(task_client: TestClient) -> None:
@@ -304,6 +304,6 @@ def test_exchange_confined_to_documented_event_surface(task_client: TestClient) 
     assert task["status"] == "completed"
     assert api.requests
     for request in api.requests:
-        assert request["path"].startswith(("/api/v1/actions/", "/api/v1/executions/"))
+        assert request["path"].startswith(("/api/v1/action/", "/api/v1/execution/"))
         if request["method"] == "GET":
             assert request["json"] is None

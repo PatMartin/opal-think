@@ -1,4 +1,4 @@
-"""Settings endpoints (``/api/v1/settings/`` and ``/api/v1/settings/{key}``).
+"""Settings endpoints (``/api/v1/setting/`` and ``/api/v1/setting/{key}``).
 
 Portable settings with strong ETags. Collection GET/PATCH use the global revision ETag
 (``"s<n>"``); single-key GET/PUT/DELETE use the per-key revision ETag (``"k<n>"``).
@@ -10,35 +10,20 @@ dotted-key map with ``pending_restart_fields`` as a reserved, server-managed key
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, Path, Request, Response
 
 from opal_think.deps import get_settings
 from opal_think.errors import OpalHTTPException
+from opal_think.preconditions import if_match_revision
 from opal_think.schemas import Setting, SettingUpdate
 from opal_think.settings_registry import RevisionConflict, SettingsRegistry
 
-router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
+router = APIRouter(prefix="/api/v1/setting", tags=["settings"])
 
 _KEY_PATTERN = r"^[A-Za-z][A-Za-z0-9_.-]*$"
 SettingKey = Path(min_length=1, max_length=200, pattern=_KEY_PATTERN)
-
-
-_IF_MATCH_PATTERN = re.compile(r'^"[^"]+"$')
-
-
-def _require_if_match(request: Request) -> str:
-    """If-Match must be exactly one strong quoted ETag: missing -> 428,
-    weak tags/lists/``*``/unquoted -> 422, stale revision -> 412."""
-    raw = request.headers.get("If-Match")
-    if raw is None:
-        raise OpalHTTPException(428, "precondition_required", "If-Match header is required for settings mutations")
-    raw = raw.strip()
-    if not _IF_MATCH_PATTERN.match(raw):
-        raise OpalHTTPException(422, "invalid_if_match", "If-Match must be exactly one strong quoted ETag")
-    return raw.strip('"')
 
 
 def _setting_payload(item: dict[str, Any]) -> Setting:
@@ -67,39 +52,21 @@ def _get_or_404(registry: SettingsRegistry, key: str) -> dict[str, Any]:
     return item
 
 
-def _if_match_revision(request: Request, prefix: str) -> int:
-    """Parse the If-Match precondition into the expected revision integer.
-
-    The comparison itself happens inside the store's write transaction — this
-    only enforces header presence and shape (428 missing, 412 malformed)."""
-    supplied = _require_if_match(request)
-    if not supplied.startswith(prefix):
-        raise OpalHTTPException(412, "precondition_failed", "If-Match does not match the current settings revision")
-    try:
-        return int(supplied[len(prefix) :])
-    except ValueError as exc:
-        raise OpalHTTPException(
-            412,
-            "precondition_failed",
-            "If-Match does not match the current settings revision; re-read settings and retry",
-        ) from exc
-
-
-@router.get("/", operation_id="opal_settings_get", summary="List settings")
+@router.get("/", operation_id="opal_setting_list", summary="List settings")
 def list_settings(response: Response, registry: SettingsRegistry = Depends(get_settings)) -> dict[str, Any]:
     settings_map, etag = _map_payload(registry)
     response.headers["ETag"] = etag
     return settings_map
 
 
-@router.patch("/", operation_id="opal_settings_patch", summary="Atomically patch settings")
+@router.patch("/", operation_id="opal_setting_patch", summary="Atomically patch settings")
 def patch_settings(
     request: Request,
     response: Response,
     patch: dict[str, Any],
     registry: SettingsRegistry = Depends(get_settings),
 ) -> dict[str, Any]:
-    expected = _if_match_revision(request, "s")
+    expected = if_match_revision(request, "s")
     if "pending_restart_fields" in patch:
         raise OpalHTTPException(422, "invalid_settings", "pending_restart_fields is a reserved, read-only key")
     errors = [
@@ -143,7 +110,7 @@ def set_setting(
     registry: SettingsRegistry = Depends(get_settings),
 ) -> Setting:
     _get_or_404(registry, key)
-    expected = _if_match_revision(request, "k")
+    expected = if_match_revision(request, "k")
     if (reason := registry.validate_value(key, body.value)) is not None:
         raise OpalHTTPException(422, "invalid_settings", f"invalid value for {key}: {reason}")
     try:
@@ -166,7 +133,7 @@ def remove_setting_override(
     registry: SettingsRegistry = Depends(get_settings),
 ) -> Response:
     _get_or_404(registry, key)
-    expected = _if_match_revision(request, "k")
+    expected = if_match_revision(request, "k")
     try:
         registry.store.reset_checked(key, expect_key=expected)
     except RevisionConflict as exc:

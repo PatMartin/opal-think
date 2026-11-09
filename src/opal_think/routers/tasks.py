@@ -1,4 +1,4 @@
-"""Task endpoints (``/api/v1/tasks/`` family).
+"""Task endpoints (``/api/v1/task/`` family).
 
 Admission is asynchronous: POST returns 202 + Location, never a completed answer. Session
 links serialize active work (409 while busy); Idempotency-Key dedupes admission; the
@@ -23,7 +23,7 @@ from opal_think.pagination import decode_scoped_cursor, encode_scoped_cursor
 from opal_think.schemas import TERMINAL_TASK_STATUSES, Task, TaskCreate, TaskPage, TaskStatus
 from opal_think.store import ThinkStore
 
-router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
+router = APIRouter(prefix="/api/v1/task", tags=["tasks"])
 
 TaskId = Path(min_length=1, max_length=128)
 

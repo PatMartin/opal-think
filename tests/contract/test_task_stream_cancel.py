@@ -18,7 +18,7 @@ def task_client(client: TestClient) -> TestClient:
 
 
 def _create(client: TestClient, prompt: str = "hi there friend") -> str:
-    return client.post("/api/v1/tasks/", json={"prompt": prompt}).json()["id"]
+    return client.post("/api/v1/task/", json={"prompt": prompt}).json()["id"]
 
 
 def _frames(response) -> list[dict]:
@@ -39,7 +39,7 @@ def _set_delay(client: TestClient, seconds: float) -> None:
 def test_stream_lifecycle_events(task_client: TestClient) -> None:
     _set_delay(task_client, 0.4)
     task_id = _create(task_client)
-    with task_client.stream("GET", f"/api/v1/tasks/{task_id}/stream") as response:
+    with task_client.stream("GET", f"/api/v1/task/{task_id}/stream") as response:
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
         assert response.headers["X-Opal-Request-Id"]
@@ -57,12 +57,12 @@ def test_stream_lifecycle_events(task_client: TestClient) -> None:
 def test_stream_late_connect_terminal_snapshot(task_client: TestClient) -> None:
     task_id = _create(task_client)
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and task_client.get(f"/api/v1/tasks/{task_id}").json()["status"] not in {
+    while time.monotonic() < deadline and task_client.get(f"/api/v1/task/{task_id}").json()["status"] not in {
         "completed",
         "failed",
     }:
         time.sleep(0.05)
-    with task_client.stream("GET", f"/api/v1/tasks/{task_id}/stream") as response:
+    with task_client.stream("GET", f"/api/v1/task/{task_id}/stream") as response:
         frames = _frames(response)
     assert len(frames) == 1
     assert frames[0]["type"] == "task.completed"
@@ -71,29 +71,29 @@ def test_stream_late_connect_terminal_snapshot(task_client: TestClient) -> None:
 
 
 def test_stream_unknown_task(task_client: TestClient) -> None:
-    assert task_client.get("/api/v1/tasks/task_missing/stream").status_code == 404
+    assert task_client.get("/api/v1/task/task_missing/stream").status_code == 404
 
 
 def test_cancel_running_task(task_client: TestClient) -> None:
     _set_delay(task_client, 3.0)
     task_id = _create(task_client)
     time.sleep(0.1)  # let the runner start
-    response = task_client.post(f"/api/v1/tasks/{task_id}/cancel")
+    response = task_client.post(f"/api/v1/task/{task_id}/cancel")
     assert response.status_code == 202
     assert response.json()["cancel_requested"] is True
     # repeated cancellation is idempotent while in-progress: 202 if still running,
     # 409 if the (fast) cancellation already completed — both contract-valid
-    assert task_client.post(f"/api/v1/tasks/{task_id}/cancel").status_code in {202, 409}
+    assert task_client.post(f"/api/v1/task/{task_id}/cancel").status_code in {202, 409}
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        status = task_client.get(f"/api/v1/tasks/{task_id}").json()["status"]
+        status = task_client.get(f"/api/v1/task/{task_id}").json()["status"]
         if status != "running":
             break
         time.sleep(0.05)
     assert status == "cancelled"
     # terminal -> 409
-    assert task_client.post(f"/api/v1/tasks/{task_id}/cancel").status_code == 409
+    assert task_client.post(f"/api/v1/task/{task_id}/cancel").status_code == 409
 
 
 def test_cancel_unknown_task(task_client: TestClient) -> None:
-    assert task_client.post("/api/v1/tasks/task_missing/cancel").status_code == 404
+    assert task_client.post("/api/v1/task/task_missing/cancel").status_code == 404

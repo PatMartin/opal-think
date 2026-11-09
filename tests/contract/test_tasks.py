@@ -1,4 +1,4 @@
-"""Contract tests: POST /api/v1/tasks/ admission + GET show/list."""
+"""Contract tests: POST /api/v1/task/ admission + GET show/list."""
 
 from __future__ import annotations
 
@@ -24,13 +24,13 @@ def task_client(client: TestClient) -> TestClient:
 def _create(client: TestClient, prompt: str = "hello", **extra) -> TestClient:
     body = {"prompt": prompt}
     body.update(extra)
-    return client.post("/api/v1/tasks/", json=body)
+    return client.post("/api/v1/task/", json=body)
 
 
 def _wait_terminal(client: TestClient, task_id: str, seconds: float = 5.0) -> dict:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        task = client.get(f"/api/v1/tasks/{task_id}").json()
+        task = client.get(f"/api/v1/task/{task_id}").json()
         if task["status"] in {"completed", "failed", "cancelled", "timed_out"}:
             return task
         time.sleep(0.05)
@@ -40,7 +40,7 @@ def _wait_terminal(client: TestClient, task_id: str, seconds: float = 5.0) -> di
 def test_create_task_accepted(task_client: TestClient) -> None:
     response = _create(task_client, metadata={"evalset": "smoke", "case_id": "c1"})
     assert response.status_code == 202, response.text
-    assert "/api/v1/tasks/" in response.headers["Location"]
+    assert "/api/v1/task/" in response.headers["Location"]
     body = response.json()
     assert body["id"].startswith("task_")
     assert body["status"] in {"queued", "running", "completed"}
@@ -66,7 +66,7 @@ def test_create_task_session_not_found(task_client: TestClient) -> None:
 
 
 def test_create_task_session_busy_conflict(task_client: TestClient) -> None:
-    session = task_client.post("/api/v1/sessions/", json={}).json()
+    session = task_client.post("/api/v1/session/", json={}).json()
     task_client.app.state.store.insert_task(
         {"id": "task_busy", "session_id": session["id"], "status": "running", "prompt": "x", "created_at": "2026-01-01"}
     )
@@ -77,11 +77,11 @@ def test_create_task_session_busy_conflict(task_client: TestClient) -> None:
 
 def test_idempotency_key_replay(task_client: TestClient) -> None:
     body = {"prompt": "same"}
-    first = task_client.post("/api/v1/tasks/", json=body, headers={"Idempotency-Key": "k-1"})
-    second = task_client.post("/api/v1/tasks/", json=body, headers={"Idempotency-Key": "k-1"})
+    first = task_client.post("/api/v1/task/", json=body, headers={"Idempotency-Key": "k-1"})
+    second = task_client.post("/api/v1/task/", json=body, headers={"Idempotency-Key": "k-1"})
     assert second.status_code == 202
     assert second.json()["id"] == first.json()["id"]
-    conflict = task_client.post("/api/v1/tasks/", json={"prompt": "different"}, headers={"Idempotency-Key": "k-1"})
+    conflict = task_client.post("/api/v1/task/", json={"prompt": "different"}, headers={"Idempotency-Key": "k-1"})
     assert conflict.status_code == 409
 
 
@@ -101,29 +101,29 @@ def test_unknown_model_rejected(task_client: TestClient) -> None:
 
 def test_no_model_available_503(client: TestClient) -> None:
     client.app.state.settings.store.set_many({"providers.ollama.base_url": "http://127.0.0.1:1"})
-    assert client.post("/api/v1/tasks/", json={"prompt": "x"}).status_code == 503
+    assert client.post("/api/v1/task/", json={"prompt": "x"}).status_code == 503
 
 
 def test_causation_depth_bound(task_client: TestClient) -> None:
     task_client.app.state.settings.store.set_many({"task.max_causation_depth": 1})
     parent = _create(task_client).json()  # depth 0
     child = task_client.post(  # depth 1 -> allowed
-        "/api/v1/tasks/", json={"prompt": "child"}, headers={"X-Opal-Causation-Id": parent["id"]}
+        "/api/v1/task/", json={"prompt": "child"}, headers={"X-Opal-Causation-Id": parent["id"]}
     )
     assert child.status_code == 202
     grandchild = task_client.post(  # depth 2 > limit 1 -> rejected
-        "/api/v1/tasks/", json={"prompt": "grandchild"}, headers={"X-Opal-Causation-Id": child.json()["id"]}
+        "/api/v1/task/", json={"prompt": "grandchild"}, headers={"X-Opal-Causation-Id": child.json()["id"]}
     )
     assert grandchild.status_code == 422
     assert grandchild.json()["error"]["code"] == "causation_depth_exceeded"
 
 
 def test_show_task_404(task_client: TestClient) -> None:
-    assert task_client.get("/api/v1/tasks/task_missing").status_code == 404
+    assert task_client.get("/api/v1/task/task_missing").status_code == 404
 
 
 def test_list_tasks_filters_and_pagination(task_client: TestClient) -> None:
-    session = task_client.post("/api/v1/sessions/", json={}).json()
+    session = task_client.post("/api/v1/session/", json={}).json()
     _wait_terminal(task_client, _create(task_client, "a").json()["id"])
     busy = task_client.app.state.store
     busy.insert_task(
@@ -139,23 +139,23 @@ def test_list_tasks_filters_and_pagination(task_client: TestClient) -> None:
         }
     )
 
-    queued = task_client.get("/api/v1/tasks/?status=queued").json()
+    queued = task_client.get("/api/v1/task/?status=queued").json()
     assert [t["id"] for t in queued["items"]] == ["task_q"]
 
-    by_session = task_client.get(f"/api/v1/tasks/?session_id={session['id']}").json()
+    by_session = task_client.get(f"/api/v1/task/?session_id={session['id']}").json()
     assert {t["id"] for t in by_session["items"]} == {"task_q"}
 
-    page = task_client.get("/api/v1/tasks/?limit=1").json()
+    page = task_client.get("/api/v1/task/?limit=1").json()
     assert page["has_more"] is True
-    page2 = task_client.get(f"/api/v1/tasks/?limit=1&cursor={page['next_cursor']}").json()
+    page2 = task_client.get(f"/api/v1/task/?limit=1&cursor={page['next_cursor']}").json()
     assert page["items"][0]["id"] != page2["items"][0]["id"]
 
     # cursor bound to filters: reuse under a different filter -> 422
-    assert task_client.get("/api/v1/tasks/", params={"cursor": page["next_cursor"], "status": "failed"}).status_code == 422
-    assert task_client.get("/api/v1/tasks/", params={"cursor": "junk"}).status_code == 422
+    assert task_client.get("/api/v1/task/", params={"cursor": page["next_cursor"], "status": "failed"}).status_code == 422
+    assert task_client.get("/api/v1/task/", params={"cursor": "junk"}).status_code == 422
 
 
 def test_task_prompt_validation(task_client: TestClient) -> None:
     assert _create(task_client, prompt="").status_code == 422
-    too_long = task_client.post("/api/v1/tasks/", json={"prompt": "x" * 40000})
+    too_long = task_client.post("/api/v1/task/", json={"prompt": "x" * 40000})
     assert too_long.status_code == 422

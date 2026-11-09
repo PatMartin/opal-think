@@ -135,15 +135,15 @@ def run_case(evalset_name: str, case: dict[str, Any], tmp_path: Path) -> tuple[d
     if case.get("idempotent_replay"):
         headers["Idempotency-Key"] = f"{evalset_name}:{case['id']}"
     with TestClient(app) as client:
-        created = client.post("/api/v1/tasks/", json=body, headers=headers)
+        created = client.post("/api/v1/task/", json=body, headers=headers)
         assert created.status_code == 202, created.text
         task_id = created.json()["id"]
         if cancel_after := case.get("cancel_after"):
             time.sleep(float(cancel_after))
-            client.post(f"/api/v1/tasks/{task_id}/cancel")
+            client.post(f"/api/v1/task/{task_id}/cancel")
         task = _wait_terminal(client, task_id)
         if case.get("idempotent_replay"):
-            replayed = client.post("/api/v1/tasks/", json=body, headers=headers)
+            replayed = client.post("/api/v1/task/", json=body, headers=headers)
             outcome["replayed_id"] = replayed.json().get("id") if replayed.status_code == 202 else None
         if not live:
             outcome["tool_messages"] = [
@@ -166,7 +166,7 @@ def run_case(evalset_name: str, case: dict[str, Any], tmp_path: Path) -> tuple[d
 def _wait_terminal(client: TestClient, task_id: str, seconds: float = 15.0) -> dict[str, Any]:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        task = client.get(f"/api/v1/tasks/{task_id}").json()
+        task = client.get(f"/api/v1/task/{task_id}").json()
         if task["status"] in TERMINAL:
             return task
         time.sleep(0.05)

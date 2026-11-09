@@ -1,4 +1,4 @@
-"""Session endpoints (``/api/v1/sessions/`` and ``/api/v1/sessions/{session_id}``).
+"""Session endpoints (``/api/v1/session/`` and ``/api/v1/session/{session_id}``).
 
 Optional durable conversation context: POST creates (201+Location), GET lists
 newest-updated-first with expiring cursors, DELETE removes the session AND its
@@ -15,7 +15,7 @@ from opal_think.pagination import decode_scoped_cursor, encode_scoped_cursor
 from opal_think.schemas import Session, SessionCreate, SessionPage
 from opal_think.store import ThinkStore
 
-router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
+router = APIRouter(prefix="/api/v1/session", tags=["sessions"])
 
 SessionId = Path(min_length=1, max_length=128)
 

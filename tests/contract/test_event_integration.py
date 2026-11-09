@@ -26,7 +26,7 @@ def _fake(task_client: TestClient):
 def _wait_terminal(client: TestClient, task_id: str, seconds: float = 5.0) -> dict:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        task = client.get(f"/api/v1/tasks/{task_id}").json()
+        task = client.get(f"/api/v1/task/{task_id}").json()
         if task["status"] in {"completed", "failed", "cancelled", "timed_out"}:
             return task
         time.sleep(0.05)
@@ -37,7 +37,7 @@ def _script_task(client: TestClient, script: list[Generation], event_client=None
     _fake(client).set_script(script)
     if event_client is not None:
         client.app.state.event_client = event_client
-    task_id = client.post("/api/v1/tasks/", json={"prompt": "diagnose the gpu", "model_id": "fake:script"}).json()["id"]
+    task_id = client.post("/api/v1/task/", json={"prompt": "diagnose the gpu", "model_id": "fake:script"}).json()["id"]
     return _wait_terminal(client, task_id)
 
 

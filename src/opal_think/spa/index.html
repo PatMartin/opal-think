@@ -43,6 +43,7 @@
   <button data-view="tasks">Tasks</button>
   <button data-view="sessions">Sessions</button>
   <button data-view="models">Models</button>
+  <button data-view="personas">Personas</button>
   <button data-view="settings">Settings</button>
 </nav>
 <main>
@@ -76,6 +77,12 @@
     <p class="muted">Discovered from configured providers. Use the opaque ID in task <code>model_id</code>.</p>
     <table id="models-table"><thead><tr><th>ID</th><th>Provider</th><th>Available</th><th>Ctx</th><th>Capabilities</th><th>Description</th></tr></thead><tbody></tbody></table>
     <div id="model-detail" class="panel hidden"></div>
+  </section>
+  <section id="view-personas" class="panel hidden">
+    <h2>Personas <button class="small" id="persona-new">New persona</button></h2>
+    <p class="muted">Named assistant identities shared across the suite; <code>voice_id</code> binds an OPAL Say voice. Mutations are guarded by the configuration ETag.</p>
+    <table id="personas-table"><thead><tr><th>ID</th><th>Name</th><th>Enabled</th><th>Voice</th><th>Description</th><th></th></tr></thead><tbody></tbody></table>
+    <div id="persona-detail" class="panel hidden"></div>
   </section>
   <section id="view-settings" class="panel hidden">
     <h2>Settings</h2>
@@ -157,7 +164,7 @@ async function refreshHealth() {
 }
 
 // ---- views ----
-const loaders = { settings: loadSettings, sessions: loadSessions, models: loadModels, tasks: loadTasks, ask: loadAsk };
+const loaders = { settings: loadSettings, sessions: loadSessions, models: loadModels, tasks: loadTasks, ask: loadAsk, personas: loadPersonas };
 document.querySelectorAll("nav button").forEach((btn) => btn.addEventListener("click", () => {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === btn));
   document.querySelectorAll("main section").forEach((s) => s.classList.add("hidden"));
@@ -169,12 +176,12 @@ document.querySelectorAll("nav button").forEach((btn) => btn.addEventListener("c
 async function renderSettings(data) {
   const tbody = $("#settings-table tbody");
   tbody.innerHTML = "";
-  // GET /settings/ is a flat OpalSettingsMap; per-key GETs supply default/restart flags.
+  // GET /setting/ is a flat OpalSettingsMap; per-key GETs supply default/restart flags.
   const keys = Object.keys(data).filter((k) => k !== "pending_restart_fields").sort();
   for (const key of keys) {
     let item;
     try {
-      item = (await api(`/api/v1/settings/${encodeURIComponent(key)}`)).body;
+      item = (await api(`/api/v1/setting/${encodeURIComponent(key)}`)).body;
     } catch (_) {
       item = { key, value: data[key], default: null, is_default: true, pending_restart: false };
     }
@@ -198,7 +205,7 @@ async function renderSettings(data) {
 }
 
 async function loadSettings() {
-  try { await renderSettings((await api("/api/v1/settings/")).body); }
+  try { await renderSettings((await api("/api/v1/setting/")).body); }
   catch (e) { toast(`settings: ${e.message}`); }
 }
 
@@ -208,8 +215,8 @@ async function editSetting(key) {
   let value;
   try { value = JSON.parse(raw); } catch (_) { value = raw; }
   try {
-    const { etag } = await api(`/api/v1/settings/${encodeURIComponent(key)}`);
-    await api(`/api/v1/settings/${encodeURIComponent(key)}`, { method: "PUT", headers: { "If-Match": etag }, body: JSON.stringify({ value }) });
+    const { etag } = await api(`/api/v1/setting/${encodeURIComponent(key)}`);
+    await api(`/api/v1/setting/${encodeURIComponent(key)}`, { method: "PUT", headers: { "If-Match": etag }, body: JSON.stringify({ value }) });
     toast(`${key} updated`, false);
     loadSettings();
   } catch (e) { toast(`${key}: ${e.message}`); }
@@ -218,8 +225,8 @@ async function editSetting(key) {
 async function resetSetting(key) {
   if (!confirm(`Reset ${key} to its default?`)) return;
   try {
-    const { etag } = await api(`/api/v1/settings/${encodeURIComponent(key)}`);
-    await api(`/api/v1/settings/${encodeURIComponent(key)}`, { method: "DELETE", headers: { "If-Match": etag } });
+    const { etag } = await api(`/api/v1/setting/${encodeURIComponent(key)}`);
+    await api(`/api/v1/setting/${encodeURIComponent(key)}`, { method: "DELETE", headers: { "If-Match": etag } });
     toast(`${key} reset`, false);
     loadSettings();
   } catch (e) { toast(`${key}: ${e.message}`); }
@@ -230,7 +237,7 @@ let sessionsCursor = null;
 
 async function loadSessions(append = false) {
   try {
-    const { body } = await api(`/api/v1/sessions/${append && sessionsCursor ? `?cursor=${encodeURIComponent(sessionsCursor)}` : ""}`);
+    const { body } = await api(`/api/v1/session/${append && sessionsCursor ? `?cursor=${encodeURIComponent(sessionsCursor)}` : ""}`);
     const tbody = $("#sessions-table tbody");
     if (!append) tbody.innerHTML = "";
     for (const s of body.items) {
@@ -259,7 +266,7 @@ async function loadSessions(append = false) {
 $("#session-new").addEventListener("click", async () => {
   const title = prompt("Session title (optional):") ?? null;
   try {
-    const { body } = await api("/api/v1/sessions/", { method: "POST", body: JSON.stringify(title ? { title } : {}) });
+    const { body } = await api("/api/v1/session/", { method: "POST", body: JSON.stringify(title ? { title } : {}) });
     toast(`created ${body.id}`, false);
     loadSessions();
     loadAsk();  // refresh the Ask session picker
@@ -268,7 +275,7 @@ $("#session-new").addEventListener("click", async () => {
 
 async function removeSession(id) {
   if (!confirm(`Remove ${id} and its retained task records?`)) return;
-  try { await api(`/api/v1/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); toast(`${id} removed`, false); loadSessions(); }
+  try { await api(`/api/v1/session/${encodeURIComponent(id)}`, { method: "DELETE" }); toast(`${id} removed`, false); loadSessions(); }
   catch (e) {
     if (e.status === 409) toast(`${id}: cancel active tasks before removing`);
     else toast(`${id}: ${e.message}`);
@@ -280,7 +287,7 @@ async function loadModels() {
   const tbody = $("#models-table tbody");
   tbody.replaceChildren(mutedRow(6, "Loading…"));
   try {
-    const { body } = await api("/api/v1/models/");
+    const { body } = await api("/api/v1/model/");
     tbody.replaceChildren();
     for (const m of body) {
       const caps = Object.entries(m.capabilities).filter(([, v]) => v).map(([k]) => k).join(", ");
@@ -292,7 +299,7 @@ async function loadModels() {
         const detail = $("#model-detail");
         detail.classList.remove("hidden");
         try {
-          const { body: full } = await api(`/api/v1/models/${encodeURIComponent(m.id)}`);
+          const { body: full } = await api(`/api/v1/model/${encodeURIComponent(m.id)}`);
           detail.replaceChildren(
             el("p", {}, code(full.id), " ", pill(full.available ? "available" : "unavailable", full.available ? "set" : "")),
             el("p", { class: "muted", text: `provider ${full.provider} · context ${full.context_window ?? "unknown"}` }),
@@ -308,19 +315,110 @@ async function loadModels() {
   }
 }
 
+// ---- personas ----
+// Personas share the portable-configuration revision with settings: the collection
+// GET and single GET both return it as ETag, and every mutation requires it as If-Match.
+let personasEtag = null;
+
+async function loadPersonas() {
+  const tbody = $("#personas-table tbody");
+  tbody.replaceChildren(mutedRow(6, "Loading…"));
+  try {
+    const { body, etag } = await api("/api/v1/persona/");
+    personasEtag = etag;
+    tbody.replaceChildren();
+    for (const p of body) {
+      const tr = el("tr", {},
+        td(code(p.persona_id)), tdText(p.name),
+        td(p.enabled ? pill("yes", "set") : pill("no")),
+        tdText(p.voice_id, "muted"), tdText(p.description, "muted"), td());
+      const actions = tr.lastElementChild;
+      const edit = document.createElement("button");
+      edit.className = "small"; edit.textContent = "Edit";
+      edit.onclick = () => editPersona(p);
+      const validate = document.createElement("button");
+      validate.className = "small"; validate.textContent = "Validate"; validate.style.marginLeft = ".4rem";
+      validate.onclick = () => validatePersona(p.persona_id);
+      const del = document.createElement("button");
+      del.className = "small"; del.textContent = "Remove"; del.style.marginLeft = ".4rem";
+      del.onclick = () => removePersona(p.persona_id);
+      actions.append(edit, validate, del);
+      tbody.appendChild(tr);
+    }
+    if (!body.length) tbody.appendChild(mutedRow(6, "No personas registered."));
+  } catch (e) {
+    tbody.replaceChildren(mutedRow(6, `Persona catalog unavailable: ${e.message}`));
+  }
+}
+
+$("#persona-new").addEventListener("click", async () => {
+  const persona_id = prompt("Persona id (letters/digits, then . _ - allowed):");
+  if (!persona_id) return;
+  const name = prompt("Persona name:");
+  if (!name) return;
+  const voice_id = prompt("OPAL Say voice_id (optional):") || null;
+  const description = prompt("Description (optional):") || null;
+  const body = { persona_id, name, enabled: true };
+  if (voice_id) body.voice_id = voice_id;
+  if (description) body.description = description;
+  try {
+    await api("/api/v1/persona/", { method: "POST", headers: { "If-Match": personasEtag || (await api("/api/v1/persona/")).etag }, body: JSON.stringify(body) });
+    toast(`persona ${persona_id} registered`, false);
+    loadPersonas();
+  } catch (e) { toast(`persona: ${e.message}`); }
+});
+
+async function editPersona(p) {
+  const name = prompt(`Name for ${p.persona_id} (blank keeps "${p.name}"):`, "");
+  const voice = prompt(`voice_id (blank keeps ${p.voice_id ?? "none"}; "-" clears):`, "");
+  const enabled = confirm(`Persona ${p.persona_id}: OK = enabled, Cancel = disabled`);
+  const body = { enabled };
+  if (name) body.name = name;
+  if (voice === "-") body.voice_id = null;
+  else if (voice) body.voice_id = voice;
+  try {
+    const { etag } = await api(`/api/v1/persona/${encodeURIComponent(p.persona_id)}`);
+    await api(`/api/v1/persona/${encodeURIComponent(p.persona_id)}`, { method: "PATCH", headers: { "If-Match": etag }, body: JSON.stringify(body) });
+    toast(`${p.persona_id} updated`, false);
+    loadPersonas();
+  } catch (e) { toast(`${p.persona_id}: ${e.message}`); }
+}
+
+async function removePersona(id) {
+  if (!confirm(`Remove persona ${id}?`)) return;
+  try {
+    const { etag } = await api(`/api/v1/persona/${encodeURIComponent(id)}`);
+    await api(`/api/v1/persona/${encodeURIComponent(id)}`, { method: "DELETE", headers: { "If-Match": etag } });
+    toast(`${id} removed`, false);
+    loadPersonas();
+  } catch (e) { toast(`${id}: ${e.message}`); }
+}
+
+async function validatePersona(id) {
+  const detail = $("#persona-detail");
+  detail.classList.remove("hidden");
+  try {
+    const { body } = await api(`/api/v1/persona/${encodeURIComponent(id)}/validate`, { method: "POST", body: "{}" });
+    const nodes = [el("p", {}, code(id), " ", pill(body.valid ? "valid" : "invalid", body.valid ? "set" : ""))];
+    for (const e of body.errors || []) nodes.push(el("p", { text: `error: ${e}`, style: "color:var(--err)" }));
+    for (const w of body.warnings || []) nodes.push(el("p", { text: `warning: ${w}`, style: "color:var(--warn)" }));
+    detail.replaceChildren(...nodes);
+  } catch (e) { detail.replaceChildren(muted(`validate: ${e.message}`)); }
+}
+
 // ---- ask + tasks ----
 const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out"]);
 
 async function loadAsk() {
   const modelSel = $("#ask-model"), sessSel = $("#ask-session");
   try {
-    const { body: models } = await api("/api/v1/models/");
+    const { body: models } = await api("/api/v1/model/");
     if (modelSel.options.length <= 1) {
       for (const m of models.filter((m) => m.available)) modelSel.add(new Option(m.id, m.id));
     }
   } catch (_) { /* providers may be down */ }
   try {
-    const { body: sessions } = await api("/api/v1/sessions/");
+    const { body: sessions } = await api("/api/v1/session/");
     const current = sessSel.value;
     sessSel.replaceChildren(new Option("no session", ""));
     for (const s of sessions.items) sessSel.add(new Option(s.title || s.id, s.id));
@@ -335,7 +433,7 @@ $("#ask-submit").addEventListener("click", async () => {
   if ($("#ask-model").value) body.model_id = $("#ask-model").value;
   if ($("#ask-session").value) body.session_id = $("#ask-session").value;
   try {
-    const { body: task } = await api("/api/v1/tasks/", { method: "POST", body: JSON.stringify(body) });
+    const { body: task } = await api("/api/v1/task/", { method: "POST", body: JSON.stringify(body) });
     $("#ask-result").classList.remove("hidden");
     renderTask($("#ask-result"), task);
     watchTask(task.id, $("#ask-result"));
@@ -353,12 +451,12 @@ function watchTask(id, el) {
     if (done) return;
     done = true;
     controller.abort();
-    try { renderTask(el, (await api(`/api/v1/tasks/${encodeURIComponent(id)}`)).body); }
+    try { renderTask(el, (await api(`/api/v1/task/${encodeURIComponent(id)}`)).body); }
     catch (_) { /* final snapshot best-effort */ }
   };
   (async () => {
     try {
-      const res = await fetch(`/api/v1/tasks/${encodeURIComponent(id)}/stream`, { headers: { "Accept": "text/event-stream", ...authHeaders() }, signal: controller.signal });
+      const res = await fetch(`/api/v1/task/${encodeURIComponent(id)}/stream`, { headers: { "Accept": "text/event-stream", ...authHeaders() }, signal: controller.signal });
       if (!res.ok || !res.body) { finish(); return; }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -397,7 +495,7 @@ function watchTask(id, el) {
 
 async function cancelTask(id) {
   try {
-    await api(`/api/v1/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST", body: "{}" });
+    await api(`/api/v1/task/${encodeURIComponent(id)}/cancel`, { method: "POST", body: "{}" });
     toast(`cancel requested for ${id}`, false);
   } catch (e) {
     if (e.status === 409) toast(`${id} already finished`);
@@ -434,7 +532,7 @@ async function loadTasks(append = false) {
   const tbody = $("#tasks-table tbody");
   const params = [status ? `status=${status}` : "", append && tasksCursor ? `cursor=${encodeURIComponent(tasksCursor)}` : ""].filter(Boolean).join("&");
   try {
-    const { body } = await api(`/api/v1/tasks/${params ? `?${params}` : ""}`);
+    const { body } = await api(`/api/v1/task/${params ? `?${params}` : ""}`);
     if (!append) tbody.replaceChildren();
     for (const t of body.items) {
       const tr = el("tr", {},
@@ -444,7 +542,7 @@ async function loadTasks(append = false) {
       tr.onclick = async () => {
         const detail = $("#task-detail");
         detail.classList.remove("hidden");
-        const { body: full } = await api(`/api/v1/tasks/${encodeURIComponent(t.id)}`);
+        const { body: full } = await api(`/api/v1/task/${encodeURIComponent(t.id)}`);
         renderTask(detail, full);
       };
       tbody.appendChild(tr);

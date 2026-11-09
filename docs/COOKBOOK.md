@@ -288,7 +288,7 @@ TASK_ID="$(opal think task create --detach \
   'Evaluate whether release 2026.11.7 meets our stated go/no-go criteria.')"
 opal think task watch "$TASK_ID"
 # Register EVENT action release.approve_or_hold to POST this task context to THINK or an approver.
-curl -fsS "$EVENT_URL/api/v1/actions/release.approve_or_hold/execute" \
+curl -fsS "$EVENT_URL/api/v1/action/release.approve_or_hold/execute" \
   -H 'Content-Type: application/json' \
   -d "{\"data\":{\"think_task_id\":\"$TASK_ID\"}}"
 ```

@@ -6,7 +6,7 @@ may act on the world **only** through registered OPAL-EVENT actions — never by
 executing model-generated shell/URL/Python directly. REST is the sole implementation
 surface; the Typer CLI and single-file SPA communicate over HTTP only.
 
-- Contract: `opal_think.v1.4.0.yaml` (vendored at `src/opal_think/contract/`, tested byte-identical)
+- Contract: `openapi/opal_think_v1.6.0.yaml` (vendored byte-identical at `src/opal_think/contract/`)
 - Stack: FastAPI · Pydantic v2 · Typer · HTTPX · stdlib SQLite under `var/` · asyncio engine
 
 ## Quick start
@@ -22,19 +22,21 @@ opal think ask "what is 2+2"
 `opal think settings set providers.ollama.base_url '"http://HOST:11434"'`). With no
 reachable provider, readiness honestly returns 503.
 
-## REST → CLI → SPA parity (all 19 contract operations)
+## REST → CLI → SPA parity (all 27 contract operations)
 
 | REST | CLI | SPA |
 |---|---|---|
-| POST /tasks/ | `task create`, `ask`, `chat` | Ask form |
-| GET /tasks/ | `task list` | Tasks view + status filter |
-| GET /tasks/{id} | `task show` | Task detail |
-| GET /tasks/{id}/stream | `task watch`, `ask`/`chat` | fetch-SSE live output |
-| POST /tasks/{id}/cancel | `task cancel` | — (button pending) |
-| POST·GET·GET·DELETE /sessions | `session add/list/show/remove` | Sessions view |
-| GET /models/·/models/{id} | `model list/show` | Models view |
-| GET·PATCH /settings/, GET·PUT·DELETE /settings/{key} | `settings list/show/set/remove` | Settings view |
+| POST /task/ | `task create`, `ask`, `chat` | Ask form |
+| GET /task/ | `task list` | Tasks view + status filter |
+| GET /task/{id} | `task show` | Task detail |
+| GET /task/{id}/stream | `task watch`, `ask`/`chat` | fetch-SSE live output |
+| POST /task/{id}/cancel | `task cancel` | — (button pending) |
+| POST·GET·GET·DELETE /session | `session add/list/show/remove` | Sessions view |
+| GET /model/·/model/{id} | `model list/show` | Models view |
+| GET·POST /persona/, GET·PATCH·DELETE /persona/{id}, POST /persona/{id}/validate | `persona list/create/show/update/remove/validate` | Personas view |
+| GET·PATCH /setting/, GET·PUT·DELETE /setting/{key} | `settings list/show/set/remove` | Settings view |
 | GET /health/·live·ready | `health [--live --ready]` | Status banner |
+| GET /info/·/info/ping | `info`, `ping` | — |
 
 ## Semantics
 

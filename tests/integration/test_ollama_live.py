@@ -40,13 +40,13 @@ def test_live_task_end_to_end(tmp_path) -> None:
     with TestClient(app) as client:
         assert client.get("/api/v1/health/ready").status_code == 200
         created = client.post(
-            "/api/v1/tasks/", json={"prompt": "Reply with exactly one word: pong", "model_id": f"ollama:{MODEL}"}
+            "/api/v1/task/", json={"prompt": "Reply with exactly one word: pong", "model_id": f"ollama:{MODEL}"}
         )
         assert created.status_code == 202
         task_id = created.json()["id"]
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
-            task = client.get(f"/api/v1/tasks/{task_id}").json()
+            task = client.get(f"/api/v1/task/{task_id}").json()
             if task["status"] in {"completed", "failed", "cancelled", "timed_out"}:
                 break
             time.sleep(1)

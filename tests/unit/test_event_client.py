@@ -27,7 +27,7 @@ async def test_list_actions_and_headers() -> None:
     client = _client(handler)
     items = await client.list_actions(CTX)
     assert items == [{"id": "a1", "enabled": True}]
-    assert seen["path"] == "/api/v1/actions/"
+    assert seen["path"] == "/api/v1/action/"
     assert seen["causation"] == "task_1"
     assert seen["auth"] is None
 

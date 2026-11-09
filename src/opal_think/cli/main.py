@@ -30,10 +30,12 @@ settings_app = typer.Typer(help="Portable service settings (strong-ETag guarded)
 sessions_app = typer.Typer(help="Optional conversation context containers.", no_args_is_help=True)
 models_app = typer.Typer(help="Discovered model catalog (read-only).", no_args_is_help=True)
 tasks_app = typer.Typer(help="Reasoning tasks: create, list, show, watch, cancel.", no_args_is_help=True)
+personas_app = typer.Typer(help="Named assistant personas (shared OPAL identities).", no_args_is_help=True)
 think_app.add_typer(settings_app, name="settings")
 think_app.add_typer(sessions_app, name="session")
 think_app.add_typer(models_app, name="model")
 think_app.add_typer(tasks_app, name="task")
+think_app.add_typer(personas_app, name="persona")
 
 _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
 
@@ -114,6 +116,18 @@ def health(
     _emit(ctx, _call(ctx, "GET", path).json())
 
 
+@think_app.command("info")
+def info(ctx: typer.Context) -> None:
+    """Service identity: implementation name, package and contract versions."""
+    _emit(ctx, _call(ctx, "GET", "/api/v1/info/").json())
+
+
+@think_app.command("ping")
+def ping(ctx: typer.Context) -> None:
+    """Lightweight liveness probe for process supervisors."""
+    _emit(ctx, _call(ctx, "GET", "/api/v1/info/ping").json())
+
+
 # -- settings ----------------------------------------------------------------------------------
 
 
@@ -126,20 +140,20 @@ def _parse_value(raw: str) -> Any:
 
 
 def _setting_etag(ctx: typer.Context, key: str) -> str:
-    return _call(ctx, "GET", f"/api/v1/settings/{key}").headers["ETag"]
+    return _call(ctx, "GET", f"/api/v1/setting/{key}").headers["ETag"]
 
 
 @settings_app.command("list")
 def settings_list(ctx: typer.Context) -> None:
     """List registered settings (portable values; secrets shown as references)."""
-    data = _call(ctx, "GET", "/api/v1/settings/").json()
+    data = _call(ctx, "GET", "/api/v1/setting/").json()
     if _state(ctx).json_output:
         _emit(ctx, data)
         return
     # The collection is a flat OpalSettingsMap; per-key GETs supply default/restart flags.
     for key in sorted(k for k in data if k != "pending_restart_fields"):
         try:
-            item = _call(ctx, "GET", f"/api/v1/settings/{key}").json()
+            item = _call(ctx, "GET", f"/api/v1/setting/{key}").json()
         except typer.Exit:
             item = {"key": key, "value": data[key], "is_default": True, "pending_restart": False}
         suffix = "  (default)" if item.get("is_default", True) else "  *"
@@ -152,7 +166,7 @@ def settings_list(ctx: typer.Context) -> None:
 @settings_app.command("show")
 def settings_show(ctx: typer.Context, key: str) -> None:
     """Show one registered setting."""
-    _emit(ctx, _call(ctx, "GET", f"/api/v1/settings/{key}").json())
+    _emit(ctx, _call(ctx, "GET", f"/api/v1/setting/{key}").json())
 
 
 @settings_app.command("set")
@@ -164,7 +178,7 @@ def settings_set(
 ) -> None:
     """Set one setting to a native JSON value (auto-fetches the strong ETag)."""
     etag = if_match or _setting_etag(ctx, key)
-    response = _call(ctx, "PUT", f"/api/v1/settings/{key}", json={"value": _parse_value(value)}, headers={"If-Match": etag})
+    response = _call(ctx, "PUT", f"/api/v1/setting/{key}", json={"value": _parse_value(value)}, headers={"If-Match": etag})
     _emit(ctx, response.json())
 
 
@@ -176,7 +190,7 @@ def settings_remove(
 ) -> None:
     """Reset a setting to its registered default (removes the override)."""
     etag = if_match or _setting_etag(ctx, key)
-    _call(ctx, "DELETE", f"/api/v1/settings/{key}", headers={"If-Match": etag})
+    _call(ctx, "DELETE", f"/api/v1/setting/{key}", headers={"If-Match": etag})
     typer.echo(f"{key}: reset to default")
 
 
@@ -189,7 +203,7 @@ def session_add(
     title: str = typer.Option(None, "--title", help="Optional human-readable label"),
 ) -> None:
     """Create a session (a durable conversation context container)."""
-    response = _call(ctx, "POST", "/api/v1/sessions/", json={"title": title})
+    response = _call(ctx, "POST", "/api/v1/session/", json={"title": title})
     data = response.json()
     if _state(ctx).json_output:
         _emit(ctx, data)
@@ -209,7 +223,7 @@ def session_list(
     params: dict[str, Any] = {"limit": limit}
     if cursor:
         params["cursor"] = cursor
-    data = _call(ctx, "GET", "/api/v1/sessions/", params=params).json()
+    data = _call(ctx, "GET", "/api/v1/session/", params=params).json()
     if _state(ctx).json_output:
         _emit(ctx, data)
         return
@@ -222,13 +236,13 @@ def session_list(
 @sessions_app.command("show")
 def session_show(ctx: typer.Context, session_id: str) -> None:
     """Show one session's metadata."""
-    _emit(ctx, _call(ctx, "GET", f"/api/v1/sessions/{session_id}").json())
+    _emit(ctx, _call(ctx, "GET", f"/api/v1/session/{session_id}").json())
 
 
 @sessions_app.command("remove")
 def session_remove(ctx: typer.Context, session_id: str) -> None:
     """Remove a session and its retained task records (409 while tasks are active)."""
-    _call(ctx, "DELETE", f"/api/v1/sessions/{session_id}")
+    _call(ctx, "DELETE", f"/api/v1/session/{session_id}")
     typer.echo(f"{session_id}: removed")
 
 
@@ -238,7 +252,7 @@ def session_remove(ctx: typer.Context, session_id: str) -> None:
 @models_app.command("list")
 def model_list(ctx: typer.Context) -> None:
     """List discovered models across configured providers."""
-    data = _call(ctx, "GET", "/api/v1/models/").json()
+    data = _call(ctx, "GET", "/api/v1/model/").json()
     if _state(ctx).json_output:
         _emit(ctx, data)
         return
@@ -255,7 +269,7 @@ def model_list(ctx: typer.Context) -> None:
 @models_app.command("show")
 def model_show(ctx: typer.Context, model_id: str) -> None:
     """Show one model's capabilities (opaque ID, e.g. ollama:llama3.2)."""
-    _emit(ctx, _call(ctx, "GET", f"/api/v1/models/{model_id}").json())
+    _emit(ctx, _call(ctx, "GET", f"/api/v1/model/{model_id}").json())
 
 
 # -- task --------------------------------------------------------------------------------------
@@ -273,7 +287,7 @@ def _await_task(ctx: typer.Context, task_id: str, timeout: float = 300.0) -> dic
     """Poll show_task until the task reaches a terminal state (watch lands with SSE)."""
     deadline = time.monotonic() + timeout
     while True:
-        data = _call(ctx, "GET", f"/api/v1/tasks/{task_id}").json()
+        data = _call(ctx, "GET", f"/api/v1/task/{task_id}").json()
         if data["status"] in _TERMINAL or time.monotonic() > deadline:
             return data
         time.sleep(0.5)
@@ -299,7 +313,7 @@ def task_create(
         body["max_steps"] = max_steps
     if timeout:
         body["timeout_seconds"] = timeout
-    data = _call(ctx, "POST", "/api/v1/tasks/", json=body).json()
+    data = _call(ctx, "POST", "/api/v1/task/", json=body).json()
     if detach:
         if _state(ctx).json_output:
             _emit(ctx, data)
@@ -331,7 +345,7 @@ def task_list(
         params["session_id"] = session_id
     if cursor:
         params["cursor"] = cursor
-    data = _call(ctx, "GET", "/api/v1/tasks/", params=params).json()
+    data = _call(ctx, "GET", "/api/v1/task/", params=params).json()
     if _state(ctx).json_output:
         _emit(ctx, data)
         return
@@ -344,14 +358,14 @@ def task_list(
 @tasks_app.command("show")
 def task_show(ctx: typer.Context, task_id: str) -> None:
     """Authoritative snapshot: status, answer, bounded steps."""
-    _emit(ctx, _call(ctx, "GET", f"/api/v1/tasks/{task_id}").json())
+    _emit(ctx, _call(ctx, "GET", f"/api/v1/task/{task_id}").json())
 
 
 def _watch_stream(ctx: typer.Context, task_id: str) -> dict | None:
     """Follow the task SSE stream to a terminal event; returns terminal frame data."""
     state = _state(ctx)
     json_mode = state.json_output
-    with state.client.stream(f"/api/v1/tasks/{task_id}/stream") as response:
+    with state.client.stream(f"/api/v1/task/{task_id}/stream") as response:
         if response.status_code >= 400:
             raise ApiCallError(response.status_code, response.text)
         saw_output = False
@@ -386,7 +400,7 @@ _TERMINAL_EVENTS = {f"task.{s}" for s in _TERMINAL}
 def task_watch(ctx: typer.Context, task_id: str) -> None:
     """Follow a task's live stream until its terminal state, then show the snapshot."""
     _watch_stream(ctx, task_id)
-    data = _call(ctx, "GET", f"/api/v1/tasks/{task_id}").json()
+    data = _call(ctx, "GET", f"/api/v1/task/{task_id}").json()
     if _state(ctx).json_output:
         _emit(ctx, data)
     elif not data.get("answer"):
@@ -398,11 +412,123 @@ def task_watch(ctx: typer.Context, task_id: str) -> None:
 @tasks_app.command("cancel")
 def task_cancel(ctx: typer.Context, task_id: str) -> None:
     """Request cooperative cancellation (terminal tasks return 409)."""
-    data = _call(ctx, "POST", f"/api/v1/tasks/{task_id}/cancel").json()
+    data = _call(ctx, "POST", f"/api/v1/task/{task_id}/cancel").json()
     if _state(ctx).json_output:
         _emit(ctx, data)
     else:
         typer.echo(f"{data['id']}  status={data['status']}  cancel_requested={data['cancel_requested']}")
+
+
+# -- persona -----------------------------------------------------------------------------------
+
+
+def _config_etag(ctx: typer.Context) -> str:
+    """Shared portable-configuration revision; persona list carries it as ETag."""
+    return _call(ctx, "GET", "/api/v1/persona/").headers["ETag"]
+
+
+def _persona_etag(ctx: typer.Context, persona_id: str) -> str:
+    return _call(ctx, "GET", f"/api/v1/persona/{persona_id}").headers["ETag"]
+
+
+@personas_app.command("list")
+def persona_list(
+    ctx: typer.Context,
+    enabled: bool = typer.Option(None, "--enabled/--disabled", help="Filter by enabled state"),
+) -> None:
+    """List registered personas (complete bounded catalog; no pagination)."""
+    params = {} if enabled is None else {"enabled": enabled}
+    data = _call(ctx, "GET", "/api/v1/persona/", params=params).json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+        return
+    for p in data:
+        voice = p["voice_id"] or "-"
+        typer.echo(f"{p['persona_id']}  {p['name']}  enabled={p['enabled']}  voice={voice}")
+
+
+@personas_app.command("create")
+def persona_create(
+    ctx: typer.Context,
+    persona_id: str,
+    name: str = typer.Option(..., "--name", help="Human-readable persona name"),
+    description: str = typer.Option(None, "--description", help="Optional character notes"),
+    voice_id: str = typer.Option(None, "--voice-id", help="OPAL Say voice binding"),
+    disabled: bool = typer.Option(False, "--disabled", help="Create disabled (default: enabled)"),
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Register a persona (auto-fetches the configuration ETag)."""
+    body: dict[str, Any] = {"persona_id": persona_id, "name": name, "enabled": not disabled}
+    if description is not None:
+        body["description"] = description
+    if voice_id is not None:
+        body["voice_id"] = voice_id
+    etag = if_match or _config_etag(ctx)
+    data = _call(ctx, "POST", "/api/v1/persona/", json=body, headers={"If-Match": etag}).json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+    else:
+        typer.echo(f"persona_id: {data['persona_id']}")
+
+
+@personas_app.command("show")
+def persona_show(ctx: typer.Context, persona_id: str) -> None:
+    """Show one registered persona."""
+    _emit(ctx, _call(ctx, "GET", f"/api/v1/persona/{persona_id}").json())
+
+
+@personas_app.command("update")
+def persona_update(
+    ctx: typer.Context,
+    persona_id: str,
+    name: str = typer.Option(None, "--name", help="New human-readable name"),
+    description: str = typer.Option(None, "--description", help="New description"),
+    voice_id: str = typer.Option(None, "--voice-id", help="Rebind to a different OPAL Say voice"),
+    clear_description: bool = typer.Option(False, "--clear-description", help="Set description to null"),
+    clear_voice: bool = typer.Option(False, "--clear-voice", help="Remove the voice binding"),
+    enabled: bool = typer.Option(None, "--enabled/--disabled", help="Set enabled state"),
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Partially update a persona (auto-fetches the configuration ETag)."""
+    body: dict[str, Any] = {}
+    if name is not None:
+        body["name"] = name
+    if description is not None:
+        body["description"] = description
+    if clear_description:
+        body["description"] = None
+    if voice_id is not None:
+        body["voice_id"] = voice_id
+    if clear_voice:
+        body["voice_id"] = None
+    if enabled is not None:
+        body["enabled"] = enabled
+    if not body:
+        typer.echo("error: nothing to update (pass at least one field option)", err=True)
+        raise typer.Exit(1)
+    etag = if_match or _persona_etag(ctx, persona_id)
+    _emit(ctx, _call(ctx, "PATCH", f"/api/v1/persona/{persona_id}", json=body, headers={"If-Match": etag}).json())
+
+
+@personas_app.command("remove")
+def persona_remove(
+    ctx: typer.Context,
+    persona_id: str,
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Remove a persona registration (auto-fetches the configuration ETag)."""
+    etag = if_match or _persona_etag(ctx, persona_id)
+    _call(ctx, "DELETE", f"/api/v1/persona/{persona_id}", headers={"If-Match": etag})
+    typer.echo(f"{persona_id}: removed")
+
+
+@personas_app.command("validate")
+def persona_validate(ctx: typer.Context, persona_id: str) -> None:
+    """Check that a persona is registered, enabled, and its bindings resolve."""
+    data = _call(ctx, "POST", f"/api/v1/persona/{persona_id}/validate").json()
+    _emit(ctx, data)
+    if not data["valid"]:
+        raise typer.Exit(1)
 
 
 @think_app.command("ask")
@@ -419,10 +545,10 @@ def ask(
         body["model_id"] = model
     if session_id:
         body["session_id"] = session_id
-    data = _call(ctx, "POST", "/api/v1/tasks/", json=body).json()
+    data = _call(ctx, "POST", "/api/v1/task/", json=body).json()
     if stream:
         _watch_stream(ctx, data["id"])
-    data = _await_task(ctx, data["id"]) if not stream else _call(ctx, "GET", f"/api/v1/tasks/{data['id']}").json()
+    data = _await_task(ctx, data["id"]) if not stream else _call(ctx, "GET", f"/api/v1/task/{data['id']}").json()
     if _state(ctx).json_output:
         _emit(ctx, data)
     elif not stream:
@@ -442,7 +568,7 @@ def chat(
 ) -> None:
     """Session-based loop: creates a session when none is supplied; per turn submits a task."""
     if not session_id:
-        session_id = _call(ctx, "POST", "/api/v1/sessions/", json={"title": None}).json()["id"]
+        session_id = _call(ctx, "POST", "/api/v1/session/", json={"title": None}).json()["id"]
         typer.echo(f"(session {session_id})", err=True)
     typer.echo("chat: 'exit' or Ctrl-D to quit", err=True)
     while True:
@@ -457,12 +583,12 @@ def chat(
         if model:
             body["model_id"] = model
         try:
-            task = _call(ctx, "POST", "/api/v1/tasks/", json=body).json()
+            task = _call(ctx, "POST", "/api/v1/task/", json=body).json()
             if stream:
                 _watch_stream(ctx, task["id"])
             else:
                 _print_task(_await_task(ctx, task["id"]))
-            task = _call(ctx, "GET", f"/api/v1/tasks/{task['id']}").json()
+            task = _call(ctx, "GET", f"/api/v1/task/{task['id']}").json()
             if task["status"] != "completed":
                 typer.echo(f"(turn ended: {task['status']})", err=True)
         except typer.Exit:

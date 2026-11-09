@@ -263,7 +263,7 @@ class _UnsupportedAdapter(FakeAdapter):
 def _wait_terminal(client, task_id: str, seconds: float = 5.0) -> dict:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        task = client.get(f"/api/v1/tasks/{task_id}").json()
+        task = client.get(f"/api/v1/task/{task_id}").json()
         if task["status"] in {"completed", "failed", "cancelled", "timed_out"}:
             return task
         time.sleep(0.05)
@@ -275,7 +275,7 @@ def test_engine_reports_unsupported_capability_not_unavailable(client, monkeypat
     client.app.state.settings.store.set_many({"providers.ollama.enabled": False})
     stub = _UnsupportedAdapter()
     monkeypatch.setattr(client.app.state.providers, "adapters", lambda: [stub])
-    created = client.post("/api/v1/tasks/", json={"prompt": "hi", "model_id": "stubopenai:echo"})
+    created = client.post("/api/v1/task/", json={"prompt": "hi", "model_id": "stubopenai:echo"})
     assert created.status_code == 202, created.text
     task = _wait_terminal(client, created.json()["id"])
     assert task["status"] == "failed"

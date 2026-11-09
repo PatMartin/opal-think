@@ -21,7 +21,7 @@ def task_client(client: TestClient) -> TestClient:
 def _terminal(task_client: TestClient, task_id: str) -> dict:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        task = task_client.get(f"/api/v1/tasks/{task_id}").json()
+        task = task_client.get(f"/api/v1/task/{task_id}").json()
         if task["status"] in {"completed", "failed", "cancelled", "timed_out"}:
             return task
         time.sleep(0.05)
@@ -38,7 +38,7 @@ def _logged_telemetry(caplog, task_id: str) -> dict:
 
 def test_completed_task_logs_telemetry(task_client, caplog) -> None:
     with caplog.at_level(logging.INFO, logger="opal_think.engine"):
-        tid = task_client.post("/api/v1/tasks/", json={"prompt": "hello"}).json()["id"]
+        tid = task_client.post("/api/v1/task/", json={"prompt": "hello"}).json()["id"]
         task = _terminal(task_client, tid)
     assert task["status"] == "completed"
     tel = _logged_telemetry(caplog, tid)
@@ -52,7 +52,7 @@ def test_completed_task_logs_telemetry(task_client, caplog) -> None:
 
 def test_failed_task_still_logs_telemetry(task_client, caplog) -> None:
     with caplog.at_level(logging.INFO, logger="opal_think.engine"):
-        tid = task_client.post("/api/v1/tasks/", json={"prompt": "x", "max_steps": 1}).json()["id"]
+        tid = task_client.post("/api/v1/task/", json={"prompt": "x", "max_steps": 1}).json()["id"]
         task = _terminal(task_client, tid)
     assert task["status"] in {"completed", "failed"}
     assert _logged_telemetry(caplog, tid), "no telemetry for terminal task"
@@ -70,7 +70,7 @@ def test_finish_emits_telemetry_to_live_subscribers(task_client) -> None:
 def test_telemetry_never_contains_prompt(task_client, caplog) -> None:
     secret_prompt = "telemetry-pii-sentinel-zzz"
     with caplog.at_level(logging.INFO, logger="opal_think.engine"):
-        tid = task_client.post("/api/v1/tasks/", json={"prompt": secret_prompt}).json()["id"]
+        tid = task_client.post("/api/v1/task/", json={"prompt": secret_prompt}).json()["id"]
         _terminal(task_client, tid)
     tel = _logged_telemetry(caplog, tid)
     assert secret_prompt not in json.dumps(tel)

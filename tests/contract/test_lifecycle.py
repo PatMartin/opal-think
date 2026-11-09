@@ -20,7 +20,7 @@ def task_client(client: TestClient) -> TestClient:
 def _wait_terminal(client: TestClient, task_id: str, seconds: float = 10.0) -> dict:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        task = client.get(f"/api/v1/tasks/{task_id}").json()
+        task = client.get(f"/api/v1/task/{task_id}").json()
         if task["status"] in {"completed", "failed", "cancelled", "timed_out"}:
             return task
         time.sleep(0.05)
@@ -28,53 +28,53 @@ def _wait_terminal(client: TestClient, task_id: str, seconds: float = 10.0) -> d
 
 
 def test_task_create_bumps_session_activity(task_client: TestClient) -> None:
-    session_id = task_client.post("/api/v1/sessions/", json={"title": "s"}).json()["id"]
-    before = task_client.get(f"/api/v1/sessions/{session_id}").json()["updated_at"]
-    task_client.post("/api/v1/tasks/", json={"prompt": "hi", "session_id": session_id})
-    after = task_client.get(f"/api/v1/sessions/{session_id}").json()["updated_at"]
+    session_id = task_client.post("/api/v1/session/", json={"title": "s"}).json()["id"]
+    before = task_client.get(f"/api/v1/session/{session_id}").json()["updated_at"]
+    task_client.post("/api/v1/task/", json={"prompt": "hi", "session_id": session_id})
+    after = task_client.get(f"/api/v1/session/{session_id}").json()["updated_at"]
     assert after > before
 
 
 def test_task_finish_bumps_session_activity(task_client: TestClient) -> None:
-    session_id = task_client.post("/api/v1/sessions/", json={"title": "s"}).json()["id"]
-    task_id = task_client.post("/api/v1/tasks/", json={"prompt": "hi", "session_id": session_id}).json()["id"]
-    mid = task_client.get(f"/api/v1/sessions/{session_id}").json()["updated_at"]
+    session_id = task_client.post("/api/v1/session/", json={"title": "s"}).json()["id"]
+    task_id = task_client.post("/api/v1/task/", json={"prompt": "hi", "session_id": session_id}).json()["id"]
+    mid = task_client.get(f"/api/v1/session/{session_id}").json()["updated_at"]
     _wait_terminal(task_client, task_id)
-    after = task_client.get(f"/api/v1/sessions/{session_id}").json()["updated_at"]
+    after = task_client.get(f"/api/v1/session/{session_id}").json()["updated_at"]
     assert after >= mid
 
 
 def test_retention_preserves_active_and_removes_stale(task_client: TestClient) -> None:
     store = task_client.app.state.store
-    fresh = task_client.post("/api/v1/sessions/", json={"title": "fresh"}).json()["id"]
-    stale = task_client.post("/api/v1/sessions/", json={"title": "stale"}).json()["id"]
+    fresh = task_client.post("/api/v1/session/", json={"title": "fresh"}).json()["id"]
+    stale = task_client.post("/api/v1/session/", json={"title": "stale"}).json()["id"]
     old = (datetime.now(UTC) - timedelta(days=90)).isoformat()
     with store.transaction() as conn:
         conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (old, stale))
     removed_tasks, removed_sessions = store.sweep_retention(task_days=30, session_days=30)
     assert removed_sessions >= 1
-    assert task_client.get(f"/api/v1/sessions/{stale}").status_code == 404
-    assert task_client.get(f"/api/v1/sessions/{fresh}").status_code == 200
+    assert task_client.get(f"/api/v1/session/{stale}").status_code == 404
+    assert task_client.get(f"/api/v1/session/{fresh}").status_code == 200
 
 
 def test_stale_session_with_active_task_survives(task_client: TestClient) -> None:
     store = task_client.app.state.store
-    session_id = task_client.post("/api/v1/sessions/", json={"title": "busy"}).json()["id"]
+    session_id = task_client.post("/api/v1/session/", json={"title": "busy"}).json()["id"]
     task_client.app.state.providers.adapters()  # warm
     fake = next(a for a in task_client.app.state.providers.adapters() if a.provider_id == "fake")
     fake.delay = 5.0  # keep the task running during the sweep
-    task_id = task_client.post("/api/v1/tasks/", json={"prompt": "long", "session_id": session_id}).json()["id"]
+    task_id = task_client.post("/api/v1/task/", json={"prompt": "long", "session_id": session_id}).json()["id"]
     old = (datetime.now(UTC) - timedelta(days=90)).isoformat()
     with store.transaction() as conn:
         conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (old, session_id))
     store.sweep_retention(task_days=30, session_days=30)
-    assert task_client.get(f"/api/v1/sessions/{session_id}").status_code == 200  # active task protects it
-    task_client.post(f"/api/v1/tasks/{task_id}/cancel")
+    assert task_client.get(f"/api/v1/session/{session_id}").status_code == 200  # active task protects it
+    task_client.post(f"/api/v1/task/{task_id}/cancel")
 
 
 def test_sweep_removes_orphan_idempotency(task_client: TestClient) -> None:
     store = task_client.app.state.store
-    resp = task_client.post("/api/v1/tasks/", json={"prompt": "x"}, headers={"Idempotency-Key": "k-expire"})
+    resp = task_client.post("/api/v1/task/", json={"prompt": "x"}, headers={"Idempotency-Key": "k-expire"})
     task_id = resp.json()["id"]
     _wait_terminal(task_client, task_id)
     old = (datetime.now(UTC) - timedelta(days=90)).isoformat()
@@ -86,16 +86,16 @@ def test_sweep_removes_orphan_idempotency(task_client: TestClient) -> None:
 
 
 def test_replay_after_task_deleted_is_fresh(task_client: TestClient) -> None:
-    session_id = task_client.post("/api/v1/sessions/", json={"title": "s"}).json()["id"]
+    session_id = task_client.post("/api/v1/session/", json={"title": "s"}).json()["id"]
     first = task_client.post(
-        "/api/v1/tasks/",
+        "/api/v1/task/",
         json={"prompt": "x", "session_id": session_id},
         headers={"Idempotency-Key": "k-replay"},
     ).json()["id"]
     _wait_terminal(task_client, first)
-    assert task_client.delete(f"/api/v1/sessions/{session_id}").status_code == 204
+    assert task_client.delete(f"/api/v1/session/{session_id}").status_code == 204
     second = task_client.post(
-        "/api/v1/tasks/",
+        "/api/v1/task/",
         json={"prompt": "x", "session_id": session_id},
         headers={"Idempotency-Key": "k-replay"},
     )
@@ -108,13 +108,13 @@ def test_replay_after_task_deleted_is_fresh(task_client: TestClient) -> None:
 
 def test_delete_session_cascades_idempotency(task_client: TestClient) -> None:
     store = task_client.app.state.store
-    session_id = task_client.post("/api/v1/sessions/", json={"title": "s"}).json()["id"]
+    session_id = task_client.post("/api/v1/session/", json={"title": "s"}).json()["id"]
     task_id = task_client.post(
-        "/api/v1/tasks/",
+        "/api/v1/task/",
         json={"prompt": "x", "session_id": session_id},
         headers={"Idempotency-Key": "k-cascade"},
     ).json()["id"]
     _wait_terminal(task_client, task_id)
-    task_client.delete(f"/api/v1/sessions/{session_id}")
+    task_client.delete(f"/api/v1/session/{session_id}")
     with store.transaction() as conn:
         assert store.lookup_idempotency(conn, "k-cascade") is None

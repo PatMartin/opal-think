@@ -41,4 +41,4 @@ def test_spa_calls_only_contract_endpoints() -> None:
     html = SPA.read_text(encoding="utf-8")
     for path in re.findall(r"api\(`?(/api/v1/[a-zA-Z0-9/_{}$(). ]+?)`?", html):
         assert path.startswith("/api/v1/"), path
-    assert "/api/v1/tasks/" in html and "/api/v1/sessions/" in html and "/api/v1/settings/" in html
+    assert "/api/v1/task/" in html and "/api/v1/session/" in html and "/api/v1/setting/" in html

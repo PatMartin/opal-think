@@ -1,4 +1,4 @@
-"""Model discovery endpoints (``/api/v1/models/`` and ``/api/v1/models/{model_id}``).
+"""Model discovery endpoints (``/api/v1/model/`` and ``/api/v1/model/{model_id}``).
 
 Read-only catalog across configured providers. Model IDs are opaque ``<provider>:<name>``
 tokens (model names may themselves contain ``:`` — split on the first only). Unreachable
@@ -15,7 +15,7 @@ from opal_think.providers import DiscoveredModel, ProviderAdapter, ProviderUnava
 from opal_think.providers.registry import ProviderRegistry
 from opal_think.schemas import Model, ModelCapabilities
 
-router = APIRouter(prefix="/api/v1/models", tags=["models"])
+router = APIRouter(prefix="/api/v1/model", tags=["models"])
 
 ModelId = Path(min_length=1, max_length=200)
 

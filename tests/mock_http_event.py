@@ -1,13 +1,13 @@
 """``mock_http_event``: released-contract EVENT fixture over ``httpx.MockTransport``.
 
-Provenance: this fixture models the released ``opal_event.1.4.0.yaml`` surface that
-THINK consumes (verified against ``opal-event`` @ contract 1.4.0 at implementation
+Provenance: this fixture models the released ``opal_event_v1.6.0.yaml`` surface that
+THINK consumes (verified against ``opal-event`` @ contract 1.6.0 at implementation
 time):
 
-- ``GET /api/v1/actions/`` -> 200 ``ListActions`` ``{items: [...], next_cursor}``
-- ``POST /api/v1/actions/{action_id}/execute`` body ``{event: {...}}`` -> 202
+- ``GET /api/v1/action/`` -> 200 ``ListActions`` ``{items: [...], next_cursor}``
+- ``POST /api/v1/action/{action_id}/execute`` body ``{event: {...}}`` -> 202
   ``Execution`` admission record (queued; admission is not outcome)
-- ``GET /api/v1/executions/{execution_id}`` -> 200 ``Execution`` (status enum:
+- ``GET /api/v1/execution/{execution_id}`` -> 200 ``Execution`` (status enum:
   queued, running, succeeded, failed, timed_out, dropped)
 - errors carry the ``OpalError`` envelope ``{error: {code, message, request_id,
   transaction_id, session_id?, causation_id?}}``; ``X-Opal-*`` context headers are
@@ -36,7 +36,7 @@ import jsonschema
 from opal_think.event_client import HttpEventClient
 
 PROVENANCE = "mock_http_event"
-CONTRACT_SOURCE = "opal_event.1.4.0.yaml"
+CONTRACT_SOURCE = "opal_event_v1.6.0.yaml"
 
 _BASE_URL = "http://event.test"
 _TOPIC_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$")
@@ -133,11 +133,11 @@ class MockEventApi:
         if not self.available:
             return self._error(503, "unavailable", "service unavailable", request)
         path = request.url.path
-        if request.method == "GET" and path == "/api/v1/actions/":
+        if request.method == "GET" and path == "/api/v1/action/":
             return self._json(200, {"items": list(self.actions), "next_cursor": None}, request)
-        if request.method == "POST" and (m := re.fullmatch(r"/api/v1/actions/([^/]+)/execute", path)):
+        if request.method == "POST" and (m := re.fullmatch(r"/api/v1/action/([^/]+)/execute", path)):
             return self._execute(m.group(1), body, request)
-        if request.method == "GET" and (m := re.fullmatch(r"/api/v1/executions/([^/]+)", path)):
+        if request.method == "GET" and (m := re.fullmatch(r"/api/v1/execution/([^/]+)", path)):
             return self._poll(m.group(1), request)
         return self._error(404, "not_found", f"resource does not exist: {path}", request)
 

@@ -131,13 +131,13 @@ def _app(tmp_path: Path, event_api: MockEventApi | None) -> TestClient:
 
 def _run_task(client: TestClient, prompt: str) -> dict:
     created = client.post(
-        "/api/v1/tasks/", json={"prompt": prompt, "model_id": f"openai:{MODEL}", "timeout_seconds": TIMEOUT}
+        "/api/v1/task/", json={"prompt": prompt, "model_id": f"openai:{MODEL}", "timeout_seconds": TIMEOUT}
     )
     assert created.status_code == 202, created.text
     task_id = created.json()["id"]
     deadline = time.monotonic() + TIMEOUT + 15
     while time.monotonic() < deadline:
-        task = client.get(f"/api/v1/tasks/{task_id}").json()
+        task = client.get(f"/api/v1/task/{task_id}").json()
         if task["status"] in TASK_TERMINAL:
             return task
         time.sleep(1)

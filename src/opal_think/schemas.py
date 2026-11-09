@@ -1,4 +1,4 @@
-"""Pydantic models mirroring ``openapi/opal_think_v1.5.0.yaml`` component schemas.
+"""Pydantic models mirroring ``openapi/opal_think_v1.6.0.yaml`` component schemas.
 
 The OpenAPI contract is authoritative; these models implement it exactly:
 ``additionalProperties: false`` maps to ``extra="forbid"``, required fields are non-defaulted,
@@ -10,9 +10,9 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 _METADATA_MAX_PROPERTIES = 32
 _METADATA_MAX_BYTES = 8192
@@ -217,3 +217,90 @@ class HealthProbe(BaseModel):
     status: Literal["ok", "degraded", "unavailable"]
     ready: bool
     details: dict[str, Any] | None = None
+
+
+# -- service info (kernel ``info`` / ``info_ping`` path items) -------------------------------------------
+
+
+class ServiceInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    version: str
+    api_version: str
+    description: str | None = None
+
+
+class LivenessRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok"] = "ok"
+
+
+class OpalValidationReport(BaseModel):
+    """Kernel ``OpalValidationReport``: ``valid`` plus service-defined diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    details: dict[str, Any] | None = None
+
+
+# -- personas (v1.6.0; shared OPAL persona identifiers introduced by OPAL Say) ----------------------------
+
+_PERSONA_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
+_T = TypeVar("_T")
+
+
+def _reject_null(value: Any) -> Any:
+    if value is None:
+        raise ValueError("field may not be null")
+    return value
+
+
+NonNull = Annotated[_T | None, BeforeValidator(_reject_null)]
+
+
+class PersonaCreate(BaseModel):
+    """Register a persona: a named assistant identity; ``voice_id`` binds an OPAL Say voice."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    persona_id: str = Field(min_length=1, max_length=200, pattern=_PERSONA_ID_PATTERN)
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    voice_id: str | None = Field(default=None, min_length=1)
+    enabled: bool = True
+
+
+class PersonaUpdate(BaseModel):
+    """Partial persona update (contract ``minProperties: 1``). ``description`` and
+    ``voice_id`` accept explicit ``null`` to clear the field; ``name``/``enabled`` do not."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: NonNull[str] = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    voice_id: str | None = Field(default=None, min_length=1)
+    enabled: NonNull[bool] = None
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> PersonaUpdate:
+        if not self.model_fields_set:
+            raise ValueError("at least one property is required")
+        return self
+
+
+class PersonaRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    persona_id: str
+    name: str
+    description: str | None = None
+    voice_id: str | None = None
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime

@@ -61,7 +61,7 @@ def test_task_watch_terminal(api) -> None:
 def test_task_cancel(api) -> None:
     fake = next(a for a in api.app.state.providers.adapters() if a.provider_id == "fake")
     fake.delay = 5.0
-    task_id = api.post("/api/v1/tasks/", json={"prompt": "slow"}).json()["id"]
+    task_id = api.post("/api/v1/task/", json={"prompt": "slow"}).json()["id"]
     result = runner.invoke(cli_main.think_app, ["task", "cancel", task_id])
     assert result.exit_code == 0, result.output
     assert "cancel_requested=True" in result.output
@@ -72,7 +72,7 @@ def test_task_cancel_terminal_conflict(api) -> None:
     import time
 
     deadline = time.monotonic() + 5
-    while api.get(f"/api/v1/tasks/{task_id}").json()["status"] not in {"completed", "failed"}:
+    while api.get(f"/api/v1/task/{task_id}").json()["status"] not in {"completed", "failed"}:
         assert time.monotonic() < deadline
         time.sleep(0.05)
     result = runner.invoke(cli_main.think_app, ["task", "cancel", task_id])
@@ -85,13 +85,13 @@ def test_chat_creates_session_and_turns(api) -> None:
     assert result.exit_code == 0, result.output
     assert "(session sess_" in result.output
     assert "echo: ping" in result.output
-    sessions = api.get("/api/v1/sessions/").json()["items"]
+    sessions = api.get("/api/v1/session/").json()["items"]
     assert sessions and sessions[0]["task_count"] == 1
 
 
 def test_chat_resumes_session(api) -> None:
-    sid = api.post("/api/v1/sessions/", json={}).json()["id"]
+    sid = api.post("/api/v1/session/", json={}).json()["id"]
     result = runner.invoke(cli_main.think_app, ["chat", "--session-id", sid], input="a\nb\nexit\n")
     assert result.exit_code == 0, result.output
     assert "echo: a" in result.output and "echo: b" in result.output
-    assert api.get(f"/api/v1/sessions/{sid}").json()["task_count"] == 2
+    assert api.get(f"/api/v1/session/{sid}").json()["task_count"] == 2

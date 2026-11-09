@@ -4,7 +4,7 @@
 openapi: 3.1.0
 info:
   title: OPAL Suite Kernel
-  version: 1.2.0
+  version: 1.6.0
   description: 'Shared contract kernel for the OPAL suite (SUITE STANDARD v1.2).
 
 
@@ -851,9 +851,8 @@ components:
           type: number
           format: float
         output_format:
-          type: object
-          additionalProperties: true
-          description: Service-defined section.
+          type: string
+          description: Audio output format; values are service-defined (e.g. 'wav', 'pcm').
         sample_rate:
           anyOf:
           - type: integer
@@ -952,9 +951,8 @@ components:
           default: 1.0
         output_format:
           allOf:
-          - type: object
-            additionalProperties: true
-            description: Service-defined section.
+          - type: string
+            description: Audio output format; values are service-defined (e.g. 'wav', 'pcm').
           default: wav
           description: Default format for completed `/generate` requests using this profile.
         sample_rate:
@@ -1051,9 +1049,8 @@ components:
           minimum: 0.0
           maximum: 2.0
         output_format:
-          type: object
-          additionalProperties: true
-          description: Service-defined section.
+          type: string
+          description: Audio output format; values are service-defined (e.g. 'wav', 'pcm').
         sample_rate:
           anyOf:
           - type: integer
@@ -1203,6 +1200,37 @@ components:
       required: []
       additionalProperties: true
       description: Partial engine configuration update; only supplied fields change.
+    ServiceInfo:
+      type: object
+      required:
+      - name
+      - version
+      - api_version
+      properties:
+        name:
+          type: string
+          description: Service implementation name.
+          example: opal-say-svc
+        version:
+          type: string
+          description: Package version.
+          example: 1.0.0
+        api_version:
+          type: string
+          description: OPAL API contract version.
+          example: v1
+        description:
+          type: string
+    LivenessRead:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          example: ok
   securitySchemes:
     BearerAuth:
       type: http
@@ -1357,7 +1385,7 @@ components:
         tags:
         - settings
         summary: List settings
-        operationId: opal_settings_get
+        operationId: opal_setting_list
         description: Return the complete portable settings map with values; never returns secret material. ETag
           carries the current revision for subsequent If-Match writes.
         responses:
@@ -1388,7 +1416,7 @@ components:
         tags:
         - settings
         summary: Patch settings
-        operationId: opal_settings_patch
+        operationId: opal_setting_patch
         description: Atomically apply a partial update to the portable settings map. Strong If-Match is mandatory.
         parameters:
         - $ref: '#/components/parameters/IfMatch'
@@ -1948,7 +1976,7 @@ components:
         tags:
         - profiles
         summary: List profiles
-        operationId: opal_profiles_list
+        operationId: opal_profile_list
         description: Return the complete bounded profile collection; pagination is not supported. An implementation
           may reject catalog sizes over an advertised deployment cap rather than silently truncate.
         responses:
@@ -1981,7 +2009,7 @@ components:
         tags:
         - profiles
         summary: Create profile
-        operationId: opal_profiles_create
+        operationId: opal_profile_create
         description: Create a reusable named profile. If `is_active` is true, the new profile becomes the only active
           profile. Strong If-Match on the current collection revision is mandatory.
         parameters:
@@ -2196,7 +2224,7 @@ components:
         tags:
         - engines
         summary: List engines
-        operationId: opal_engines_list
+        operationId: opal_engine_list
         description: Return all engines known to the service implementation. An engine can be known but unavailable.
           `enabled` is administrative configuration; `available` reports whether the implementation can currently
           use the engine. Returns the complete bounded catalog; pagination is not supported.
@@ -2309,3 +2337,71 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '428':
             $ref: '#/components/responses/PreconditionRequired'
+    info:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - info
+        summary: Service Info
+        description: 'Service identity: name, package version and API version.'
+        operationId: opal_info_get
+        responses:
+          '200':
+            description: Service identity.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/ServiceInfo'
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+    info_ping:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - info
+        summary: Ping
+        description: Lightweight liveness probe for process supervisors.
+        operationId: opal_info_ping
+        responses:
+          '200':
+            description: Service process is alive.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/LivenessRead'
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
