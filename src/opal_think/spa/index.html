@@ -133,8 +133,8 @@ $("#token-btn").addEventListener("click", () => {
 
 async function api(path, opts = {}, retried = false) {
   const res = await fetch(path, {
-    headers: { "Accept": "application/json", "Content-Type": "application/json", ...authHeaders(), ...(opts.headers || {}) },
     ...opts,
+    headers: { "Accept": "application/json", "Content-Type": "application/json", ...authHeaders(), ...(opts.headers || {}) },
   });
   if (res.status === 401 && !retried) {
     const token = prompt("Authentication required - API token:");
@@ -443,7 +443,7 @@ $("#ask-submit").addEventListener("click", async () => {
 // Fetch-based SSE reader: native EventSource cannot attach Authorization headers.
 // Parses event:/data: frames; any disconnect or terminal frame ends with a final
 // REST snapshot, so disconnects degrade gracefully instead of hanging.
-function watchTask(id, el) {
+function watchTask(id, host) {
   const controller = new AbortController();
   let streamed = "";
   let done = false;
@@ -451,7 +451,7 @@ function watchTask(id, el) {
     if (done) return;
     done = true;
     controller.abort();
-    try { renderTask(el, (await api(`/api/v1/task/${encodeURIComponent(id)}`)).body); }
+    try { renderTask(host, (await api(`/api/v1/task/${encodeURIComponent(id)}`)).body); }
     catch (_) { /* final snapshot best-effort */ }
   };
   (async () => {
@@ -469,7 +469,7 @@ function watchTask(id, el) {
         try { frame = JSON.parse(payload); } catch (_) { return; }
         if (eventName === "task.output") {
           streamed += frame.data?.text || "";
-          renderTask(el, { id, status: "running", model_id: "…", steps_completed: "…", steps: [], answer: streamed, error: null });
+          renderTask(host, { id, status: "running", model_id: "…", steps_completed: "…", steps: [], answer: streamed, error: null });
         } else if (frame.type && frame.type.replace("task.", "") !== "progress") {
           finish();
         }
@@ -503,7 +503,7 @@ async function cancelTask(id) {
   }
 }
 
-function renderTask(el, t) {
+function renderTask(host, t) {
   const header = el("p", {},
     code(t.id), " ",
     pill(t.status, t.status === "completed" ? "set" : ""), " ",
@@ -522,7 +522,7 @@ function renderTask(el, t) {
       ...(t.steps || []).map((s) =>
         el("li", {}, pill(s.kind), " ", el("span", { text: s.summary }), " ", muted(`(${s.status})`)))));
   }
-  el.replaceChildren(...nodes);
+  host.replaceChildren(...nodes);
 }
 
 let tasksCursor = null;
