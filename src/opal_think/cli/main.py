@@ -33,7 +33,10 @@ think_app = typer.Typer(
 settings_app = typer.Typer(help="Portable service settings (strong-ETag guarded).", no_args_is_help=True)
 sessions_app = typer.Typer(help="Optional conversation context containers.", no_args_is_help=True)
 models_app = typer.Typer(help="Discovered model catalog (read-only).", no_args_is_help=True)
-tasks_app = typer.Typer(help="Reasoning tasks: create, list, show, watch, cancel.", no_args_is_help=True)
+tasks_app = typer.Typer(
+    help="Task lifecycle: create submits work, list/show inspect it, watch streams it to a terminal state, "
+    "cancel requests cooperative cancellation. `ask` and `chat` are shortcuts over this same lifecycle.",
+    no_args_is_help=True)
 personas_app = typer.Typer(help="Named assistant personas (shared OPAL identities).", no_args_is_help=True)
 info_app = typer.Typer(help="Service identity, version and health probes.", no_args_is_help=True)
 think_app.add_typer(settings_app, name="setting")
@@ -324,7 +327,12 @@ def task_create(
     timeout: int = typer.Option(None, "--timeout", help="Task deadline seconds", min=1, max=3600),
     detach: bool = typer.Option(False, "--detach", help="Return the task id without awaiting"),
 ) -> None:
-    """Submit one unit of work; prints the task id or waits for completion."""
+    """Submit one unit of work; prints the task id (--detach) or waits for completion.
+
+    Without --session-id the task is stateless; pass --session-id to serialize
+    the task into an existing session so turns share context. Follow with
+    `task watch` to stream progress or `task cancel` to request cancellation.
+    """
     body: dict[str, Any] = {"prompt": prompt}
     if model:
         body["model_id"] = model
@@ -555,7 +563,11 @@ def ask(
     session_id: str = typer.Option(None, "--session-id", help="Existing session id"),
     stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream output live"),
 ) -> None:
-    """One-shot task: create, watch the stream, print the answer."""
+    """Stateless one-shot: create one task, stream it, print the answer.
+
+    Shortcut for `task create` + `task watch`. No session is created unless
+    --session-id names an existing session to serialize the turn into.
+    """
     body: dict[str, Any] = {"prompt": prompt}
     if model:
         body["model_id"] = model
@@ -582,7 +594,10 @@ def chat(
     session_id: str = typer.Option(None, "--session-id", help="Resume an existing session"),
     stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream output live"),
 ) -> None:
-    """Session-based loop: creates a session when none is supplied; per turn submits a task."""
+    """Interactive session loop: creates a session when --session-id is not
+    supplied, then submits one task per turn bound to that session so turns
+    share context. 'exit', 'quit' or Ctrl-D ends the loop.
+    """
     if not session_id:
         session_id = _call(ctx, "POST", "/api/v1/session/", json={"title": None}).json()["id"]
         typer.echo(f"(session {session_id})", err=True)
