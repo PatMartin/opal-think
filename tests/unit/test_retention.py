@@ -35,7 +35,7 @@ def test_session_sweep_cascades_when_no_active(tmp_path) -> None:
     store.add_session(title="old")
     with store._lock, store._connect() as conn:
         conn.execute("UPDATE sessions SET updated_at = ?", (old,))
-    sid = store.list_sessions(10, None)[0][0]["id"]
+    sid = store.list_sessions(10)[0]["id"]
     store.insert_task(_row("task_hist", session_id=sid, finished=old, created=old))
     store.add_session(title="fresh")
     _, sessions_removed = store.sweep_retention(task_days=30, session_days=90)

@@ -808,16 +808,7 @@ components:
     BearerAuth: {$ref: './shared/opal_kernel.yaml#/components/securitySchemes/BearerAuth'}
   parameters:
     PersonaId:
-      name: persona_id
-      in: path
-      required: true
-      description: Globally unique OPAL persona identifier.
-      schema:
-        type: string
-        minLength: 1
-        maxLength: 200
-        pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
-      example: amy
+      $ref: './shared/opal_kernel.yaml#/components/parameters/OpalPersonaIdParameter'
     TaskId:
       name: task_id
       in: path
@@ -1172,103 +1163,11 @@ components:
       description: Models are discovered from configured provider adapters, not installed or deleted via this REST
         API.
     PersonaCreate:
-      type: object
-      additionalProperties: false
-      required:
-      - persona_id
-      - name
-      properties:
-        persona_id:
-          type: string
-          minLength: 1
-          maxLength: 200
-          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*
-          description: Globally unique OPAL persona identifier.
-          example: amy
-        name:
-          type: string
-          minLength: 1
-          maxLength: 200
-          description: Human-readable persona name.
-          example: Amy
-        description:
-          anyOf:
-          - type: string
-            maxLength: 1000
-          - type: 'null'
-          description: Optional human-readable description or character notes.
-        voice_id:
-          anyOf:
-          - type: string
-            minLength: 1
-          - type: 'null'
-          description: Optional OPAL Say voice identifier associated with this persona.
-          example: en-gb-alan-low
-        enabled:
-          type: boolean
-          default: true
-          description: Whether this persona may be selected.
-      example:
-        persona_id: amy
-        name: Amy
-        voice_id: en-gb-alan-low
-        enabled: true
+      $ref: './shared/opal_kernel.yaml#/components/schemas/OpalPersonaCreate'
     PersonaUpdate:
-      type: object
-      minProperties: 1
-      additionalProperties: false
-      description: Partial update to a persona.
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 200
-        description:
-          anyOf:
-          - type: string
-            maxLength: 1000
-          - type: 'null'
-        voice_id:
-          anyOf:
-          - type: string
-            minLength: 1
-          - type: 'null'
-          description: Rebind the persona to a different OPAL Say voice identifier.
-        enabled:
-          type: boolean
+      $ref: './shared/opal_kernel.yaml#/components/schemas/OpalPersonaUpdate'
     PersonaRead:
-      type: object
-      required:
-      - persona_id
-      - name
-      - enabled
-      - created_at
-      - updated_at
-      properties:
-        persona_id:
-          type: string
-          description: Globally unique OPAL persona identifier.
-          example: amy
-        name:
-          type: string
-          example: Amy
-        description:
-          anyOf:
-          - type: string
-          - type: 'null'
-        voice_id:
-          anyOf:
-          - type: string
-          - type: 'null'
-          description: Optional OPAL Say voice identifier associated with this persona.
-        enabled:
-          type: boolean
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
+      $ref: './shared/opal_kernel.yaml#/components/schemas/OpalPersonaRead'
 x-opal-cli-commands:
   ask: POST /api/v1/tasks/ + watch/show
   chat: session add (optional initial) + POST /api/v1/tasks/ per turn

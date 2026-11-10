@@ -286,5 +286,6 @@ class PersonaRead(BaseModel):
     description: str | None = None
     voice_id: str | None = None
     enabled: bool
+    origin: Literal["local", "owner"] = "local"
     created_at: datetime
     updated_at: datetime

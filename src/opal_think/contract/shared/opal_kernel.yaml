@@ -4,7 +4,7 @@
 openapi: 3.1.0
 info:
   title: OPAL Suite Kernel
-  version: 1.6.0
+  version: 1.7.0
   description: 'Shared contract kernel for the OPAL suite (SUITE STANDARD v1.2).
 
 
@@ -46,6 +46,73 @@ x-opal-event-envelope:
     (topic + JSON with topic/data) is unchanged across versions. Consumers extract known correlation keys (session_id,
     transaction_id, request_id, causation_id) and MUST ignore unknown metadata fields; producers may emit any metadata_schema_version
     without breaking the wire contract.
+x-opal-cli-format:
+  version: '1.0'
+  description: Canonical CLI binding for OPAL operations. Every annotated operation maps to one canonical
+    command `opal <service> [parent] [group] <command>`; `aliases` names alternate complete spellings that dispatch
+    to the same operation (e.g. Think's `ask`/`chat` invoke `task create`). Readers hoist a path-level per-method
+    map onto each operation; both forms carry the same descriptor shape.
+  descriptor:
+    command: required — canonical verb, kebab-case (`list`, `add`, `show`, `update`, `remove`, `validate`, ...)
+    group: optional — command group (`task`, `persona`, `backup`, `info`, ...)
+    parent: optional — super-group above `group` (`config`, `data`)
+    aliases: optional — array of alternate complete command spellings for this operation
+  placement:
+    operation: '`x-opal-cli: <descriptor>`'
+    path_item: '`x-opal-cli: {<method>: <descriptor>}` — required for kernel-mounted paths (extensions cannot
+      inject into `$ref`ed operations)'
+  example:
+    parent: config
+    group: persona
+    command: list
+x-opal-persona:
+  version: '1.0'
+  description: >-
+    Portable OPAL persona contract. A persona is an identity with optional
+    per-service bindings. OPAL Think hosts the authoritative registry; every
+    service keeps full local CRUD for standalone operation, and the owner
+    record wins on conflict when a consumer is configured to reach it.
+  ownership:
+    authoritative_writer: OPAL Think
+    obtain: >-
+      Consumers resolve an unknown persona_id from
+      GET {owner_url}/api/v1/persona/{persona_id}, cache it with its ETag
+      (origin: owner), and revalidate on use. No owner_url means standalone:
+      local personas only.
+    conflict: owner record wins when owner_url is configured; local records are retained.
+  resolution:
+    order: explicit request field > persona binding > profile > service default
+    per_field: true
+  bindings:
+    voice_id: OPAL Say validates resolvability; other services treat it as an opaque nullable reference.
+    think: model/instructions binding lives in Think's service-local fields; Think validates.
+    validation: >-
+      POST /api/v1/persona/{persona_id}/validate reports that service's
+      binding resolvability, not a suite-wide verdict.
+  errors:
+    unknown_persona: 404 on read, 422 when referenced by a request
+    binding_unresolvable: 422 on use; /validate reports it without deleting the persona
+    disabled: 422/409 on use; record and bindings remain readable
+  examples:
+    think_only:
+      persona_id: amy
+      name: Amy
+      enabled: true
+      description: Persona with only a Think model/instructions binding (service-local fields).
+    say_only:
+      persona_id: vox
+      name: Vox
+      voice_id: en-gb-alan-low
+      enabled: true
+      description: Persona with only a Say voice binding.
+    combined:
+      persona_id: amy
+      name: Amy
+      description: Ops assistant.
+      voice_id: en-gb-alan-low
+      enabled: true
+      origin: owner
+      description_of_example: Think model + instructions plus a Say voice, synced from the owner.
 components:
   headers:
     OpalSessionIdHeader:
@@ -137,6 +204,18 @@ components:
       schema:
         type: string
         pattern: ^"[^"]+"$
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Optional caller-scoped deduplication key for admissions that accept it. Repeating a request
+        with the same key and an identical request body replays the original admission result; reusing the key
+        with a different body is rejected with 409 Conflict. Each service documents which operations honor the
+        key and how long key/fingerprint records are retained.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
     Limit:
       name: limit
       in: query
@@ -185,6 +264,27 @@ components:
         type: string
         minLength: 1
       example: piper
+    ServiceLogLines:
+      name: lines
+      in: query
+      required: false
+      description: Number of trailing log lines to return.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 10
+    OpalPersonaIdParameter:
+      name: persona_id
+      in: path
+      required: true
+      description: Globally unique OPAL persona identifier.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+        pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
+      example: amy
   responses:
     BadRequest:
       description: Malformed request syntax or invalid parameter encoding.
@@ -1213,6 +1313,170 @@ components:
           enum:
           - ok
           example: ok
+    OpalServiceStartOptions:
+      type: object
+      properties:
+        append:
+          type: boolean
+          default: false
+          description: Append to the existing service log file instead of truncating it. By default
+            `logs/opal_<service>.log` is overwritten on each start.
+      required: []
+      additionalProperties: true
+      description: Options for service start.
+    OpalServiceStatus:
+      type: object
+      required:
+      - state
+      properties:
+        state:
+          type: string
+          enum:
+          - running
+          - stopped
+          description: Whether the service's server process is running after the operation.
+        pid:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Process identifier of the running server; null when stopped or unknown.
+        previous_pid:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Process identifier of a prior instance terminated by `service start`; null when none was
+            running.
+        log_file:
+          type: string
+          description: Path of the log file receiving server output (`logs/opal_<service>.log`).
+      additionalProperties: true
+      description: Lifecycle state of the service's server process as reported by start/stop.
+    OpalServiceLogTail:
+      type: object
+      required:
+      - lines
+      properties:
+        log_file:
+          type: string
+          description: Path of the service log file (`logs/opal_<service>.log`).
+        lines:
+          type: array
+          items:
+            type: string
+          description: Trailing log lines, oldest first; at most `lines` entries.
+      additionalProperties: true
+      description: Trailing lines of the service log file.
+    OpalPersonaCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - persona_id
+      - name
+      properties:
+        persona_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*
+          description: Globally unique OPAL persona identifier.
+          example: amy
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Human-readable persona name.
+          example: Amy
+        description:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          description: Optional human-readable description or character notes.
+        voice_id:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          description: Optional OPAL Say voice identifier associated with this persona.
+          example: en-gb-alan-low
+        enabled:
+          type: boolean
+          default: true
+          description: Whether this persona may be selected.
+      example:
+        persona_id: amy
+        name: Amy
+        voice_id: en-gb-alan-low
+        enabled: true
+    OpalPersonaUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      description: Partial update to a persona.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+        voice_id:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          description: Rebind the persona to a different OPAL Say voice identifier.
+        enabled:
+          type: boolean
+    OpalPersonaRef:
+      type: string
+      minLength: 1
+      maxLength: 200
+      pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
+    OpalPersonaRead:
+      type: object
+      required:
+      - persona_id
+      - name
+      - enabled
+      - created_at
+      - updated_at
+      properties:
+        persona_id:
+          type: string
+          description: Globally unique OPAL persona identifier.
+          example: amy
+        name:
+          type: string
+          example: Amy
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+        voice_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Optional OPAL Say voice identifier associated with this persona.
+        enabled:
+          type: boolean
+        origin:
+          type: string
+          enum: [local, owner]
+          default: local
+          description: >-
+            Provenance: `local` (authored here, standalone) or `owner` (synced
+            from the authoritative registry at OPAL Think). Optional and
+            additive; absent means `local`.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
   securitySchemes:
     BearerAuth:
       type: http
@@ -2385,5 +2649,127 @@ components:
             $ref: '#/components/responses/Unauthorized'
           '403':
             $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+    service_start:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      post:
+        tags:
+        - service
+        summary: Start service
+        operationId: opal_service_start
+        description: 'Start the service''s server process in the background and return immediately. Server output
+          is written to `logs/opal_<service>.log`; the log file is overwritten by default unless `append` is
+          requested. If another server process is already running it is terminated before the new one is launched,
+          so `start` doubles as restart. The response reports the launched process; readiness is reported separately
+          by `/api/v1/health/ready`.'
+        requestBody:
+          required: false
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalServiceStartOptions'
+        responses:
+          '200':
+            description: Server process launched.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalServiceStatus'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '500':
+            $ref: '#/components/responses/OperationFailed'
+    service_stop:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      post:
+        tags:
+        - service
+        summary: Stop service
+        operationId: opal_service_stop
+        description: Stop the service's server process if it is running. Not an error when no server is running;
+          the response reports the resulting state.
+        responses:
+          '200':
+            description: Resulting process state.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalServiceStatus'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '422':
+            $ref: '#/components/responses/UnprocessableEntity'
+          '500':
+            $ref: '#/components/responses/OperationFailed'
+    service_log:
+      parameters:
+      - $ref: '#/components/parameters/OpalSessionIdParameter'
+      - $ref: '#/components/parameters/OpalTransactionIdParameter'
+      - $ref: '#/components/parameters/OpalRequestIdParameter'
+      - $ref: '#/components/parameters/OpalCausationIdParameter'
+      get:
+        tags:
+        - service
+        summary: Tail service log
+        operationId: opal_service_log
+        description: Return the trailing lines of the service's log file (`logs/opal_<service>.log`); defaults
+          to the last 10 lines.
+        parameters:
+        - $ref: '#/components/parameters/ServiceLogLines'
+        responses:
+          '200':
+            description: Trailing log lines.
+            headers:
+              X-Opal-Session-Id:
+                $ref: '#/components/headers/OpalSessionIdHeader'
+              X-Opal-Transaction-Id:
+                $ref: '#/components/headers/OpalTransactionIdHeader'
+              X-Opal-Request-Id:
+                $ref: '#/components/headers/OpalRequestIdHeader'
+              X-Opal-Causation-Id:
+                $ref: '#/components/headers/OpalCausationIdHeader'
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/OpalServiceLogTail'
+          '401':
+            $ref: '#/components/responses/Unauthorized'
+          '403':
+            $ref: '#/components/responses/Forbidden'
+          '404':
+            $ref: '#/components/responses/NotFound'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'

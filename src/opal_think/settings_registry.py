@@ -174,9 +174,11 @@ class SettingsStore:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS personas ("
                 "persona_id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, voice_id TEXT,"
-                " enabled INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                " enabled INTEGER NOT NULL, origin TEXT NOT NULL DEFAULT 'local', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
             )
             conn.execute("INSERT OR IGNORE INTO meta (name, value) VALUES ('revision', '0')")
+            if "origin" not in {r[1] for r in conn.execute("PRAGMA table_info(personas)")}:
+                conn.execute("ALTER TABLE personas ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path, timeout=10)
