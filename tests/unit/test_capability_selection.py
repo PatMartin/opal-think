@@ -72,7 +72,40 @@ async def test_default_without_event_picks_ollama_first_alphabetical(tmp_path) -
         transport=_ollama_transport(models=[{"name": "bbb"}, {"name": "aaa"}], shows={}),
     )
     _, _, resolved, _ = await _engine(tmp_path, adapter, with_event=False).resolve_model(None)
-    assert resolved == "ollama:aaa"  # no EVENT -> no capability scan -> deterministic first
+    assert resolved == "ollama:aaa"  # no EVENT -> first generative candidate wins
+
+
+async def test_default_skips_embedding_only_model(tmp_path) -> None:
+    """all-minilm-style embedding models advertise no 'completion' capability and must
+    never become the task default — alphabetically first or not."""
+    adapter = OllamaAdapter(
+        "ollama",
+        "http://ollama.test",
+        transport=_ollama_transport(
+            models=[{"name": "all-minilm:22m"}, {"name": "qwen2.5-coder:7b"}],
+            shows={
+                "all-minilm:22m": {"capabilities": ["embedding"], "details": {"families": ["bert"]}},
+                "qwen2.5-coder:7b": {"capabilities": ["completion", "tools"]},
+            },
+        ),
+    )
+    _, _, resolved, discovered = await _engine(tmp_path, adapter, with_event=False).resolve_model(None)
+    assert resolved == "ollama:qwen2.5-coder:7b"
+    assert discovered.generative is True
+
+
+async def test_ollama_show_marks_embedding_model_non_generative() -> None:
+    adapter = OllamaAdapter(
+        "ollama",
+        "http://ollama.test",
+        transport=_ollama_transport(
+            models=[{"name": "all-minilm:22m"}],
+            shows={"all-minilm:22m": {"capabilities": ["embedding"], "details": {"families": ["bert"]}}},
+        ),
+    )
+    model = await adapter.show_model("all-minilm:22m")
+    assert model.generative is False
+    assert model.streaming is False and model.tool_calling is False and model.structured_output is False
 
 
 async def test_tools_allowed_gate() -> None:

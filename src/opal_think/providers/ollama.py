@@ -56,6 +56,9 @@ class OllamaAdapter:
             raise ProviderUnavailable(f"ollama show failed: HTTP {response.status_code}")
         payload = response.json()
         capabilities = set(payload.get("capabilities") or [])
+        # Embedding-only models (e.g. all-minilm) advertise "embedding" and no "completion";
+        # they cannot serve /api/chat, so they are non-generative regardless of other flags.
+        generative = "completion" in capabilities or "embedding" not in capabilities
         info = payload.get("model_info") or {}
         context_window = next((v for k, v in info.items() if k.endswith("context_length") and isinstance(v, int)), None)
         details = payload.get("details") or {}
@@ -64,9 +67,10 @@ class OllamaAdapter:
         return DiscoveredModel(
             name=name,
             available=True,
-            streaming=True,
+            generative=generative,
+            streaming=generative,
             tool_calling="tools" in capabilities,
-            structured_output=True,  # ollama supports the `format` constraint broadly
+            structured_output=generative,  # ollama supports the `format` constraint broadly
             vision="vision" in capabilities or bool(families & {"clip", "mllama"}),
             context_window=context_window,
             description=description,

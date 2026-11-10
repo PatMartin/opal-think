@@ -140,19 +140,20 @@ class TaskEngine:
             detail = "no enabled provider is reachable" if failures else "no models are configured or enabled"
             raise OpalHTTPException(503, "unavailable", f"cannot accept task: {detail}")
         adapter, model = self._pick_default(available)
-        # When EVENT is configured the default should be tool-capable: resolve verified
-        # capabilities for candidates until one qualifies (bounded; list entries may be
-        # names-only/unverified).
-        if self._event_client() is not None:
-            for cand_adapter, cand_model in available[:8]:
-                shown = cand_model
-                if not cand_model.capabilities_verified:
-                    try:
-                        shown = await cand_adapter.show_model(cand_model.name) or cand_model
-                    except ProviderUnavailable:
-                        continue
-                if shown.tool_calling:
-                    return cand_adapter, shown.name, f"{cand_adapter.provider_id}:{shown.name}", shown
+        # The default must actually be able to *generate*: catalogs are names-only, so
+        # embedding-only models (e.g. all-minilm) would otherwise win alphabetically.
+        # Verify candidates via /api/show (bounded) and take the first generative one —
+        # additionally tool-capable when EVENT is configured.
+        want_tools = self._event_client() is not None
+        for cand_adapter, cand_model in available[:8]:
+            shown = cand_model
+            if not cand_model.capabilities_verified:
+                try:
+                    shown = await cand_adapter.show_model(cand_model.name) or cand_model
+                except ProviderUnavailable:
+                    continue
+            if shown.generative and (shown.tool_calling or not want_tools):
+                return cand_adapter, shown.name, f"{cand_adapter.provider_id}:{shown.name}", shown
         return adapter, model.name, f"{adapter.provider_id}:{model.name}", model
 
     @staticmethod

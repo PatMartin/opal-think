@@ -38,6 +38,9 @@ class DiscoveredModel:
     # the engine may still *attempt* tools for an explicitly requested model, but default
     # resolution prefers a verified tool-capable model.
     capabilities_verified: bool = True
+    # False for models that cannot serve chat completions at all (e.g. Ollama
+    # embedding-only models such as all-minilm) — they are never a valid task default.
+    generative: bool = True
 
 
 @dataclass
