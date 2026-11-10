@@ -43,6 +43,10 @@ class ApiClient:
         self._token = token
         self._client = http or httpx.Client(base_url=self._base_url, timeout=timeout)
 
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
     def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         headers = dict(kwargs.pop("headers", {}))
         headers.setdefault("Accept", "application/json")

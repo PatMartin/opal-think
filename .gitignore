@@ -10,3 +10,4 @@ dist/
 var/
 nul
 spec/
+logs/

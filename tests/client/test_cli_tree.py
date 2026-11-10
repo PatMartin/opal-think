@@ -19,7 +19,7 @@ def test_tree_renders_rooted_ascii() -> None:
 
 def test_tree_covers_commands_and_arguments() -> None:
     out = runner.invoke(think_app, ["tree"]).output
-    for command in ("ask", "chat", "health", "model", "session", "settings", "task", "tree"):
+    for command in ("ask", "chat", "gui", "info", "model", "persona", "service", "session", "setting", "task", "tree"):
         assert f" {command}\n" in f"{out}\n" or out.endswith(f" {command}\n")
     assert "<prompt>" in out  # required argument
     assert "<model_id>" in out

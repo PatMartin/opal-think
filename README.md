@@ -14,13 +14,14 @@ surface; the Typer CLI and single-file SPA communicate over HTTP only.
 ```bash
 uv sync
 opal-think-svc                     # serves :18100 + SPA at /
-opal think health
+opal think info health
 opal think ask "what is 2+2"
 ```
 
 `providers.ollama.enabled` defaults true at `http://127.0.0.1:11434` (retarget via
-`opal think settings set providers.ollama.base_url '"http://HOST:11434"'`). With no
-reachable provider, readiness honestly returns 503.
+`opal think setting set providers.ollama.base_url '"http://HOST:11434"'`). With no
+reachable provider, readiness honestly returns 503. To run the service detached,
+`opal think service start|log|stop` manages a background process under `logs/`.
 
 ## REST → CLI → SPA parity (all 27 contract operations)
 
@@ -34,9 +35,9 @@ reachable provider, readiness honestly returns 503.
 | POST·GET·GET·DELETE /session | `session add/list/show/remove` | Sessions view |
 | GET /model/·/model/{id} | `model list/show` | Models view |
 | GET·POST /persona/, GET·PATCH·DELETE /persona/{id}, POST /persona/{id}/validate | `persona list/create/show/update/remove/validate` | Personas view |
-| GET·PATCH /setting/, GET·PUT·DELETE /setting/{key} | `settings list/show/set/remove` | Settings view |
-| GET /health/·live·ready | `health [--live --ready]` | Status banner |
-| GET /info/·/info/ping | `info`, `ping` | — |
+| GET·PATCH /setting/, GET·PUT·DELETE /setting/{key} | `setting list/show/set/remove` | Settings view |
+| GET /health/·live·ready | `info health [--live --ready]` | Status banner |
+| GET /info/·/info/ping | `info version`, `info ping` | — |
 
 ## Semantics
 

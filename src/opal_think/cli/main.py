@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import click
@@ -14,6 +17,7 @@ import typer
 from typer.main import get_command
 
 from opal_think.cli.client import ApiCallError, ApiClient, api_url_from_env, token_from_env
+from opal_think.config import load_config
 
 
 @dataclass
@@ -31,11 +35,15 @@ sessions_app = typer.Typer(help="Optional conversation context containers.", no_
 models_app = typer.Typer(help="Discovered model catalog (read-only).", no_args_is_help=True)
 tasks_app = typer.Typer(help="Reasoning tasks: create, list, show, watch, cancel.", no_args_is_help=True)
 personas_app = typer.Typer(help="Named assistant personas (shared OPAL identities).", no_args_is_help=True)
-think_app.add_typer(settings_app, name="settings")
+info_app = typer.Typer(help="Service identity, version and health probes.", no_args_is_help=True)
+think_app.add_typer(settings_app, name="setting")
 think_app.add_typer(sessions_app, name="session")
 think_app.add_typer(models_app, name="model")
 think_app.add_typer(tasks_app, name="task")
 think_app.add_typer(personas_app, name="persona")
+think_app.add_typer(info_app, name="info")
+service_app = typer.Typer(help="Run the local opal-think-svc process.", no_args_is_help=True)
+think_app.add_typer(service_app, name="service")
 
 _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
 
@@ -102,10 +110,10 @@ def _emit_human(data: Any) -> None:
     typer.echo(json.dumps(data, indent=2, default=str))
 
 
-# -- health ------------------------------------------------------------------------------------
+# -- info (service identity, version, health, liveness) ------------------------------------------
 
 
-@think_app.command("health")
+@info_app.command("health")
 def health(
     ctx: typer.Context,
     live: bool = typer.Option(False, "--live", help="Liveness probe (process serving)"),
@@ -116,16 +124,34 @@ def health(
     _emit(ctx, _call(ctx, "GET", path).json())
 
 
-@think_app.command("info")
-def info(ctx: typer.Context) -> None:
+@info_app.command("version")
+def version(ctx: typer.Context) -> None:
     """Service identity: implementation name, package and contract versions."""
     _emit(ctx, _call(ctx, "GET", "/api/v1/info/").json())
 
 
-@think_app.command("ping")
+@info_app.command("ping")
 def ping(ctx: typer.Context) -> None:
     """Lightweight liveness probe for process supervisors."""
     _emit(ctx, _call(ctx, "GET", "/api/v1/info/ping").json())
+
+
+@think_app.command("gui")
+def gui(ctx: typer.Context) -> None:
+    """Open the SPA in a browser (served by the running service at its base URL)."""
+    import webbrowser
+
+    state = _state(ctx)
+    try:
+        state.client.get("/api/v1/info/ping", timeout=2.0)
+    except ApiCallError:
+        typer.echo(
+            f"service unreachable at {state.client.base_url}; start it with `opal think service start`",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    webbrowser.open(state.client.base_url)
+    typer.echo(f"opened {state.client.base_url} in your browser")
 
 
 # -- settings ----------------------------------------------------------------------------------
@@ -595,6 +621,132 @@ def chat(
             raise
         except Exception as exc:  # noqa: BLE001 - keep the REPL alive on a failed turn
             typer.echo(f"turn failed: {exc}", err=True)
+
+
+# -- `opal think service` ------------------------------------------------------------------------
+
+PID_FILE = Path("logs") / "opal_think.pid"
+LOG_FILE = Path("logs") / "opal_think.log"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort liveness probe for a recorded pid (tasklist on Windows, kill(0) elsewhere)."""
+    if sys.platform == "win32":
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True
+        ).stdout
+        return f',"{pid}",' in out.replace(" ", "")
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _stop_pid(pid: int, timeout: float = 10.0) -> bool:
+    """SIGTERM a recorded server pid; wait briefly for it to exit. False if it never ran."""
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.25)
+    return not _pid_alive(pid)
+
+
+def _port_owner_pid(port: int) -> int | None:
+    """PID of the process listening on the given TCP port (netstat on Windows, lsof elsewhere)."""
+    if sys.platform == "win32":
+        out = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True).stdout
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 5 and parts[1].endswith(f":{port}") and parts[3] == "LISTENING":
+                return int(parts[4])
+        return None
+    out = subprocess.run(
+        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True
+    ).stdout.strip()
+    return int(out.splitlines()[0]) if out else None
+
+
+@service_app.command("start")
+def service_start(
+    config: str = typer.Option(None, "--config", help="YAML configuration file [env: OPAL_THINK_CONFIG]"),
+) -> None:
+    """Start opal-think-svc in the background and return immediately.
+
+    Output overwrites logs/opal_think.log on each start; the child pid is recorded in
+    logs/opal_think.pid for `service stop`. Any existing service — pidfile-tracked or a
+    foreign process bound to the port — is stopped first, then replaced. Tail output
+    with `opal think service log`."""
+    config_path = config or os.environ.get("OPAL_THINK_CONFIG")
+    port = load_config(config_path).port
+    if PID_FILE.exists():
+        old_pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+        if _pid_alive(old_pid):
+            typer.echo(f"opal-think-svc already running (pid {old_pid}); stopping it first", err=True)
+            if not _stop_pid(old_pid):
+                typer.echo(f"could not stop running service (pid {old_pid})", err=True)
+                raise typer.Exit(1)
+        PID_FILE.unlink(missing_ok=True)  # stopped now, or stale file — start fresh
+    if (owner := _port_owner_pid(port)) is not None:
+        typer.echo(f"port {port} is held by pid {owner}; stopping it", err=True)
+        if not _stop_pid(owner):
+            typer.echo(f"could not free port {port} (pid {owner} still running)", err=True)
+            raise typer.Exit(1)
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    kwargs: dict = {"start_new_session": True}
+    if sys.platform == "win32":
+        kwargs = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+    cmd = [sys.executable, "-m", "opal_think"]
+    if config_path:
+        cmd += ["--config", config_path]
+    with LOG_FILE.open("w", encoding="utf-8") as log:
+        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **kwargs)
+    # The child writes its own pidfile on startup (venv python.exe is a shim whose
+    # Popen pid differs from the real server process); wait briefly for it.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            typer.echo(f"opal-think-svc failed to start (exit {proc.returncode}); see {LOG_FILE}", err=True)
+            raise typer.Exit(1)
+        if PID_FILE.exists():
+            pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+            typer.echo(f"opal-think-svc started in background (pid {pid}); logs: {LOG_FILE}")
+            return
+        time.sleep(0.25)
+    typer.echo("timed out waiting for service to write its pid file", err=True)
+    raise typer.Exit(1)
+
+
+@service_app.command("stop")
+def service_stop() -> None:
+    """Stop the background opal-think-svc (SIGTERM by pid file)."""
+    if not PID_FILE.exists():
+        typer.echo("No pid file found; service is not running (or was not started via `service start`)", err=True)
+        raise typer.Exit(1)
+    pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+    if not _stop_pid(pid):
+        PID_FILE.unlink(missing_ok=True)
+        typer.echo(f"Stale pid file removed; no process {pid}", err=True)
+        raise typer.Exit(1) from None
+    PID_FILE.unlink(missing_ok=True)  # Windows SIGTERM is abrupt; the child can't self-clean
+    typer.echo(f"stopped opal-think-svc (pid {pid})")
+
+
+@service_app.command("log")
+def service_log() -> None:
+    """Print the last 10 lines of the service log."""
+    if not LOG_FILE.exists():
+        typer.echo(f"No log file at {LOG_FILE}; start the service via `service start` first", err=True)
+        raise typer.Exit(1)
+    typer.echo("".join(LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)[-10:]), nl=False)
 
 
 # -- `opal` root -------------------------------------------------------------------------------

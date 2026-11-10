@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
 
 import typer
 import uvicorn
@@ -31,7 +33,15 @@ def run(
 
     from opal_think.app import create_app
 
-    uvicorn.run(create_app(cfg), host=cfg.host, port=cfg.port)
+    # Record the real server pid for `opal think service stop` — the spawning CLI's
+    # Popen pid can differ (venv python.exe is a shim that re-execs the interpreter).
+    pid_file = Path("logs") / "opal_think.pid"
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+    try:
+        uvicorn.run(create_app(cfg), host=cfg.host, port=cfg.port)
+    finally:
+        pid_file.unlink(missing_ok=True)
 
 
 def main() -> int:
