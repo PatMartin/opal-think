@@ -28,7 +28,7 @@ from tests.mock_http_event import MockEventApi
 # Parity constants derived from released opal_event.1.4.0.yaml:
 #   Execution.required = [id, action_id, status, trigger, created_at]
 #   Execution.status enum = queued | running | succeeded | failed | timed_out | dropped
-#   ListActions.required = [items, next_cursor]
+#   ActionList = array of Action
 #   OpalError.error.required = [code, message, request_id, transaction_id]
 EXECUTION_SCHEMA = {
     "type": "object",
@@ -143,10 +143,10 @@ def test_fixture_parity_with_released_event_contract(task_client: TestClient) ->
     )
     assert task["status"] == "completed"
     list_actions, admission, *polls = api.requests
-    # ListActions wire body (required: items, next_cursor)
+    # ActionList wire body (array of Action)
     body = list_actions["response_json"]
-    assert set(body) == {"items", "next_cursor"} and isinstance(body["items"], list)
-    assert all({"id", "type", "enabled"} <= set(a) for a in body["items"])
+    assert isinstance(body, list)
+    assert all({"id", "type", "enabled"} <= set(a) for a in body)
     # ExecutionRequest wire body and 202 Execution admission record
     assert set(admission["json"]) == {"event"}
     assert admission["status"] == 202

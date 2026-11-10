@@ -116,7 +116,7 @@ def test_live_event_discovery_surface(tmp_path, evidence) -> None:
     headers = {"Authorization": f"Bearer {os.environ[EVENT_KEY_REF]}"}
     listed = httpx.get(f"{EVENT}/api/v1/action/", headers=headers, timeout=10.0)
     assert listed.status_code == 200, listed.text[:200]
-    items = {a["id"]: a for a in listed.json()["items"]}
+    items = {a["id"]: a for a in listed.json()}
     assert ACTION in items, f"{ACTION} not in EVENT catalog: {sorted(items)}"
     entry = items[ACTION]
     evidence["results"]["discovery"] = {

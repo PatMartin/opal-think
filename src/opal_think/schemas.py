@@ -129,14 +129,6 @@ class Task(BaseModel):
     finished_at: datetime | None
 
 
-class TaskPage(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    items: list[Task]
-    next_cursor: str | None
-    has_more: bool
-
-
 class SessionCreate(BaseModel):
     """Create an optional conversation context; does not start a task."""
 
@@ -153,14 +145,6 @@ class Session(BaseModel):
     created_at: datetime
     updated_at: datetime
     task_count: int = Field(ge=0)
-
-
-class SessionPage(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    items: list[Session]
-    next_cursor: str | None
-    has_more: bool
 
 
 class ModelCapabilities(BaseModel):

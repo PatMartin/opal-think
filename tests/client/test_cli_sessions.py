@@ -61,16 +61,16 @@ def test_session_add_json(api) -> None:
     assert body["id"].startswith("sess_") and body["title"] is None
 
 
-def test_session_list_pagination_params(api) -> None:
+def test_session_list_limit(api) -> None:
     for _ in range(3):
         runner.invoke(cli_main.think_app, ["session", "add"])
     result = runner.invoke(cli_main.think_app, ["--json", "session", "list", "--limit", "2"])
     assert result.exit_code == 0
     page = json.loads(result.output)
-    assert len(page["items"]) == 2 and page["has_more"] is True
-    result = runner.invoke(cli_main.think_app, ["--json", "session", "list", "--limit", "2", "--cursor", page["next_cursor"]])
+    assert isinstance(page, list) and len(page) == 2
+    result = runner.invoke(cli_main.think_app, ["--json", "session", "list", "--limit", "10"])
     assert result.exit_code == 0
-    assert len(json.loads(result.output)["items"]) == 1
+    assert len(json.loads(result.output)) == 3
 
 
 def test_session_remove_unknown(api) -> None:

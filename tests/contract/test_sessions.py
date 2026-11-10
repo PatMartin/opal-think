@@ -55,26 +55,17 @@ def test_show_session(client: TestClient) -> None:
     assert client.get("/api/v1/session/sess_missing").status_code == 404
 
 
-def test_list_sessions_pagination(client: TestClient) -> None:
+def test_list_sessions_bounded(client: TestClient) -> None:
     for i in range(5):
         _add(client, f"s{i}")
     first = client.get("/api/v1/session/?limit=2")
     assert first.status_code == 200
     page1 = first.json()
-    assert page1["has_more"] is True
-    assert len(page1["items"]) == 2 and page1["next_cursor"]
-    page2 = client.get(f"/api/v1/session/?limit=2&cursor={page1['next_cursor']}").json()
-    page3 = client.get(f"/api/v1/session/?limit=2&cursor={page2['next_cursor']}").json()
-    ids = [i["id"] for i in page1["items"] + page2["items"] + page3["items"]]
+    assert isinstance(page1, list) and len(page1) == 2
+    full = client.get("/api/v1/session/?limit=10").json()
+    ids = [i["id"] for i in full]
     assert len(ids) == len(set(ids)) == 5
-    assert page3["has_more"] is False and page3["next_cursor"] is None
-
-
-def test_list_sessions_bad_cursor(client: TestClient) -> None:
-    for cursor in ("bogus!!!", "aGVsbG8=", ""):
-        response = client.get("/api/v1/session/", params={"cursor": cursor})
-        assert response.status_code == 422, cursor
-        _assert_error_shape(response.json())
+    assert page1 == full[:2]
 
 
 def test_remove_session(client: TestClient) -> None:

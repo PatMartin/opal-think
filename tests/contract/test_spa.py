@@ -81,4 +81,4 @@ def test_authenticated_streaming_without_eventsource() -> None:
 def test_task_lifecycle_controls_present() -> None:
     script = _html().split("<script>", 1)[1]
     assert "/cancel" in script  # task cancellation affordance
-    assert "next_cursor" in script and "cursor=" in script  # pagination wired
+    assert "/api/v1/task/" in script and "/api/v1/session/" in script  # lists wired

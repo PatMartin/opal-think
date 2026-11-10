@@ -101,33 +101,16 @@ class ThinkStore:
         with self._connect() as conn:
             return self._session_row(conn, session_id)
 
-    def list_sessions(self, limit: int, inner_cursor: str | None) -> tuple[list[dict[str, Any]], str | None]:
-        """Newest-updated first, deterministic (updated_at, id) DESC keyset.
-
-        Returns up to ``limit`` items plus the inner cursor for the next page (or None)."""
+    def list_sessions(self, limit: int) -> list[dict[str, Any]]:
+        """Newest-updated first, deterministic (updated_at, id) DESC order; ``limit`` caps items."""
         with self._connect() as conn:
-            if inner_cursor:
-                sort_at, last_id = inner_cursor.rsplit("|", 1)
-                rows = conn.execute(
-                    "SELECT s.id, s.title, s.created_at, s.updated_at,"
-                    " (SELECT COUNT(*) FROM tasks t WHERE t.session_id = s.id) AS task_count"
-                    " FROM sessions s WHERE (s.updated_at < ?) OR (s.updated_at = ? AND s.id < ?)"
-                    " ORDER BY s.updated_at DESC, s.id DESC LIMIT ?",
-                    (sort_at, sort_at, last_id, limit + 1),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT s.id, s.title, s.created_at, s.updated_at,"
-                    " (SELECT COUNT(*) FROM tasks t WHERE t.session_id = s.id) AS task_count"
-                    " FROM sessions s ORDER BY s.updated_at DESC, s.id DESC LIMIT ?",
-                    (limit + 1,),
-                ).fetchall()
-        items = [dict(row) for row in rows[:limit]]
-        next_inner = None
-        if len(rows) > limit:
-            last = items[-1]
-            next_inner = f"{last['updated_at']}|{last['id']}"
-        return items, next_inner
+            rows = conn.execute(
+                "SELECT s.id, s.title, s.created_at, s.updated_at,"
+                " (SELECT COUNT(*) FROM tasks t WHERE t.session_id = s.id) AS task_count"
+                " FROM sessions s ORDER BY s.updated_at DESC, s.id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def session_has_active_tasks(self, session_id: str) -> bool:
         with self._connect() as conn:
@@ -239,11 +222,10 @@ class ThinkStore:
     def list_tasks(
         self,
         limit: int,
-        inner_cursor: str | None,
         status: str | None = None,
         session_id: str | None = None,
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        """Newest-first (created_at, id) DESC keyset over the given filters."""
+    ) -> list[dict[str, Any]]:
+        """Newest-first (created_at, id) DESC order over the given filters; ``limit`` caps items."""
         clauses, params = [], []
         if status:
             clauses.append("status = ?")
@@ -251,22 +233,13 @@ class ThinkStore:
         if session_id:
             clauses.append("session_id = ?")
             params.append(session_id)
-        if inner_cursor:
-            sort_at, last_id = inner_cursor.rsplit("|", 1)
-            clauses.append("(created_at < ? OR (created_at = ? AND id < ?))")
-            params.extend([sort_at, sort_at, last_id])
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT * FROM tasks {where} ORDER BY created_at DESC, id DESC LIMIT ?",
-                (*params, limit + 1),
+                (*params, limit),
             ).fetchall()
-        items = [self._task_row(row) for row in rows[:limit]]
-        next_inner = None
-        if len(rows) > limit:
-            last = items[-1]
-            next_inner = f"{last['created_at']}|{last['id']}"
-        return items, next_inner
+        return [self._task_row(row) for row in rows]
 
     def session_turns(self, session_id: str, limit: int) -> list[tuple[str, str]]:
         """(prompt, answer) pairs of completed tasks in the session, oldest first."""

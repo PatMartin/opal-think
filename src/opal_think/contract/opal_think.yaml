@@ -127,14 +127,13 @@ paths:
       - $ref: '#/components/parameters/TaskStatus'
       - $ref: '#/components/parameters/TaskSessionFilter'
       - $ref: './shared/opal_kernel.yaml#/components/parameters/Limit'
-      - $ref: './shared/opal_kernel.yaml#/components/parameters/Cursor'
       responses:
         '200':
           description: Task page.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TaskPage'
+                $ref: '#/components/schemas/TaskList'
           headers:
             X-Opal-Session-Id:
               $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
@@ -346,14 +345,13 @@ paths:
         turns in a conversation, list tasks filtered by session_id.
       parameters:
       - $ref: './shared/opal_kernel.yaml#/components/parameters/Limit'
-      - $ref: './shared/opal_kernel.yaml#/components/parameters/Cursor'
       responses:
         '200':
           description: Session page.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SessionPage'
+                $ref: '#/components/schemas/SessionList'
           headers:
             X-Opal-Session-Id:
               $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
@@ -1074,24 +1072,11 @@ components:
       required:
       - code
       - message
-    TaskPage:
-      type: object
-      additionalProperties: false
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/Task'
-        next_cursor:
-          type:
-          - string
-          - 'null'
-        has_more:
-          type: boolean
-      required:
-      - items
-      - next_cursor
-      - has_more
+    TaskList:
+      type: array
+      items:
+        $ref: '#/components/schemas/Task'
+      description: Bounded list; `limit` caps the returned items.
     SessionCreate:
       type: object
       additionalProperties: false
@@ -1127,24 +1112,11 @@ components:
       - created_at
       - updated_at
       - task_count
-    SessionPage:
-      type: object
-      additionalProperties: false
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/Session'
-        next_cursor:
-          type:
-          - string
-          - 'null'
-        has_more:
-          type: boolean
-      required:
-      - items
-      - next_cursor
-      - has_more
+    SessionList:
+      type: array
+      items:
+        $ref: '#/components/schemas/Session'
+      description: Bounded list; `limit` caps the returned items.
     Model:
       type: object
       additionalProperties: false
@@ -1352,7 +1324,7 @@ x-opal-context-standard:
     $ref: './shared/opal_kernel.yaml#/x-opal-event-envelope'
     metadata_schema_version: '1.0'
   pagination:
-    history: cursor
+    history: none
     configuration: none
     default_limit: 100
     max_limit: 500

@@ -85,7 +85,7 @@ def test_chat_creates_session_and_turns(api) -> None:
     assert result.exit_code == 0, result.output
     assert "(session sess_" in result.output
     assert "echo: ping" in result.output
-    sessions = api.get("/api/v1/session/").json()["items"]
+    sessions = api.get("/api/v1/session/").json()
     assert sessions and sessions[0]["task_count"] == 1
 
 

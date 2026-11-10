@@ -137,19 +137,13 @@ components:
       schema:
         type: string
         pattern: ^"[^"]+"$
-    Cursor:
-      name: cursor
-      in: query
-      schema:
-        type: string
-      description: Opaque filter-bound cursor. Invalid/expired=422.
     Limit:
       name: limit
       in: query
       schema:
         type: integer
         minimum: 1
-      description: Maximum page size, server caps apply.
+      description: Maximum items to return; server caps apply.
     SettingKey:
       name: key
       in: path
@@ -551,18 +545,6 @@ components:
       additionalProperties: true
       description: Aggregate service health report. `status` is the only required field; all other sections are
         service-defined.
-    OpalCursorPageMetadata:
-      type: object
-      required:
-      - next_cursor
-      - has_more
-      properties:
-        next_cursor:
-          type:
-          - string
-          - 'null'
-        has_more:
-          type: boolean
     SettingRead:
       type: object
       properties:

@@ -65,7 +65,7 @@ def test_task_list_and_show(api) -> None:
 def test_task_list_status_filter(api) -> None:
     result = runner.invoke(cli_main.think_app, ["--json", "task", "list", "--status", "failed"])
     assert result.exit_code == 0
-    assert json.loads(result.output)["items"] == []
+    assert json.loads(result.output) == []
 
 
 def test_task_show_unknown(api) -> None:

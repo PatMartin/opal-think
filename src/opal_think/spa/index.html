@@ -233,14 +233,12 @@ async function resetSetting(key) {
 }
 
 // ---- sessions ----
-let sessionsCursor = null;
-
-async function loadSessions(append = false) {
+async function loadSessions() {
   try {
-    const { body } = await api(`/api/v1/session/${append && sessionsCursor ? `?cursor=${encodeURIComponent(sessionsCursor)}` : ""}`);
+    const { body } = await api(`/api/v1/session/`);
     const tbody = $("#sessions-table tbody");
-    if (!append) tbody.innerHTML = "";
-    for (const s of body.items) {
+    tbody.innerHTML = "";
+    for (const s of body) {
       const tr = el("tr", {},
         td(code(s.id)), td(s.title ?? muted("—")),
         tdText(s.task_count), tdText(s.updated_at, "muted"), td());
@@ -250,16 +248,8 @@ async function loadSessions(append = false) {
       tr.lastElementChild.appendChild(del);
       tbody.appendChild(tr);
     }
-    sessionsCursor = body.next_cursor;
-    if (!body.items.length && !append) tbody.appendChild(mutedRow(5, "No sessions."));
-    const more = $("#sessions-more");
-    more.replaceChildren();
-    if (body.has_more) {
-      const btn = document.createElement("button");
-      btn.className = "small"; btn.textContent = "Load more";
-      btn.onclick = () => loadSessions(true);
-      more.appendChild(btn);
-    }
+    if (!body.length) tbody.appendChild(mutedRow(5, "No sessions."));
+    $("#sessions-more").replaceChildren();
   } catch (e) { toast(`sessions: ${e.message}`); }
 }
 
@@ -525,16 +515,14 @@ function renderTask(host, t) {
   host.replaceChildren(...nodes);
 }
 
-let tasksCursor = null;
-
-async function loadTasks(append = false) {
+async function loadTasks() {
   const status = $("#task-filter").value;
   const tbody = $("#tasks-table tbody");
-  const params = [status ? `status=${status}` : "", append && tasksCursor ? `cursor=${encodeURIComponent(tasksCursor)}` : ""].filter(Boolean).join("&");
+  const params = status ? `?status=${status}` : "";
   try {
-    const { body } = await api(`/api/v1/task/${params ? `?${params}` : ""}`);
-    if (!append) tbody.replaceChildren();
-    for (const t of body.items) {
+    const { body } = await api(`/api/v1/task/${params}`);
+    tbody.replaceChildren();
+    for (const t of body) {
       const tr = el("tr", {},
         td(code(t.id)), tdText(t.status), tdText(t.model_id, "muted"),
         tdText((t.prompt || "").slice(0, 70)), tdText(t.finished_at, "muted"));
@@ -547,16 +535,8 @@ async function loadTasks(append = false) {
       };
       tbody.appendChild(tr);
     }
-    tasksCursor = body.next_cursor;
-    if (!body.items.length && !append) tbody.appendChild(mutedRow(5, "No tasks."));
-    const more = $("#tasks-more");
-    more.replaceChildren();
-    if (body.has_more) {
-      const btn = document.createElement("button");
-      btn.className = "small"; btn.textContent = "Load more";
-      btn.onclick = () => loadTasks(true);
-      more.appendChild(btn);
-    }
+    if (!body.length) tbody.appendChild(mutedRow(5, "No tasks."));
+    $("#tasks-more").replaceChildren();
   } catch (e) { if (!append) tbody.replaceChildren(mutedRow(5, e.message)); }
 }
 

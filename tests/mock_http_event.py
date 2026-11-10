@@ -4,7 +4,7 @@ Provenance: this fixture models the released ``opal_event_v1.6.0.yaml`` surface 
 THINK consumes (verified against ``opal-event`` @ contract 1.6.0 at implementation
 time):
 
-- ``GET /api/v1/action/`` -> 200 ``ListActions`` ``{items: [...], next_cursor}``
+- ``GET /api/v1/action/`` -> 200 ``ActionList`` ``[...]``
 - ``POST /api/v1/action/{action_id}/execute`` body ``{event: {...}}`` -> 202
   ``Execution`` admission record (queued; admission is not outcome)
 - ``GET /api/v1/execution/{execution_id}`` -> 200 ``Execution`` (status enum:
@@ -134,7 +134,7 @@ class MockEventApi:
             return self._error(503, "unavailable", "service unavailable", request)
         path = request.url.path
         if request.method == "GET" and path == "/api/v1/action/":
-            return self._json(200, {"items": list(self.actions), "next_cursor": None}, request)
+            return self._json(200, list(self.actions), request)
         if request.method == "POST" and (m := re.fullmatch(r"/api/v1/action/([^/]+)/execute", path)):
             return self._execute(m.group(1), body, request)
         if request.method == "GET" and (m := re.fullmatch(r"/api/v1/execution/([^/]+)", path)):

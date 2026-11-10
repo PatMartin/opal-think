@@ -140,19 +140,15 @@ def test_list_tasks_filters_and_pagination(task_client: TestClient) -> None:
     )
 
     queued = task_client.get("/api/v1/task/?status=queued").json()
-    assert [t["id"] for t in queued["items"]] == ["task_q"]
+    assert [t["id"] for t in queued] == ["task_q"]
 
     by_session = task_client.get(f"/api/v1/task/?session_id={session['id']}").json()
-    assert {t["id"] for t in by_session["items"]} == {"task_q"}
+    assert {t["id"] for t in by_session} == {"task_q"}
 
     page = task_client.get("/api/v1/task/?limit=1").json()
-    assert page["has_more"] is True
-    page2 = task_client.get(f"/api/v1/task/?limit=1&cursor={page['next_cursor']}").json()
-    assert page["items"][0]["id"] != page2["items"][0]["id"]
-
-    # cursor bound to filters: reuse under a different filter -> 422
-    assert task_client.get("/api/v1/task/", params={"cursor": page["next_cursor"], "status": "failed"}).status_code == 422
-    assert task_client.get("/api/v1/task/", params={"cursor": "junk"}).status_code == 422
+    assert isinstance(page, list) and len(page) == 1
+    full = task_client.get("/api/v1/task/?limit=10").json()
+    assert len(full) >= 2 and page[0]["id"] == full[0]["id"]
 
 
 def test_task_prompt_validation(task_client: TestClient) -> None:

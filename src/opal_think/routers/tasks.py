@@ -19,8 +19,7 @@ from opal_think.deps import get_context, get_engine, get_store
 from opal_think.engine import TaskEngine
 from opal_think.errors import OpalHTTPException
 from opal_think.opal_context import OpalContext
-from opal_think.pagination import decode_scoped_cursor, encode_scoped_cursor
-from opal_think.schemas import TERMINAL_TASK_STATUSES, Task, TaskCreate, TaskPage, TaskStatus
+from opal_think.schemas import TERMINAL_TASK_STATUSES, Task, TaskCreate, TaskStatus
 from opal_think.store import ThinkStore
 
 router = APIRouter(prefix="/api/v1/task", tags=["tasks"])
@@ -187,14 +186,7 @@ def list_tasks(
     status: TaskStatus | None = Query(default=None),
     session_id: str | None = Query(default=None, min_length=1),
     limit: int = Query(default=50, ge=1, le=200),
-    cursor: str | None = Query(default=None, min_length=1),
     store: ThinkStore = Depends(get_store),
-) -> TaskPage:
-    filters = {"status": status.value if status else None, "session_id": session_id}
-    inner = decode_scoped_cursor(cursor, filters) if cursor else None
-    rows, next_inner = store.list_tasks(limit, inner, status=status.value if status else None, session_id=session_id)
-    return TaskPage(
-        items=[_to_task(row) for row in rows],
-        next_cursor=encode_scoped_cursor(next_inner, filters) if next_inner else None,
-        has_more=next_inner is not None,
-    )
+) -> list[Task]:
+    rows = store.list_tasks(limit, status=status.value if status else None, session_id=session_id)
+    return [_to_task(row) for row in rows]

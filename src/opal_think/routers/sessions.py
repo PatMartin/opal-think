@@ -11,8 +11,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request, Response
 
 from opal_think.deps import get_store
 from opal_think.errors import OpalHTTPException
-from opal_think.pagination import decode_scoped_cursor, encode_scoped_cursor
-from opal_think.schemas import Session, SessionCreate, SessionPage
+from opal_think.schemas import Session, SessionCreate
 from opal_think.store import ThinkStore
 
 router = APIRouter(prefix="/api/v1/session", tags=["sessions"])
@@ -52,17 +51,10 @@ def add_session(
 @router.get("/", operation_id="list_sessions", summary="List sessions")
 def list_sessions(
     limit: int = Query(default=50, ge=1, le=200),
-    cursor: str | None = Query(default=None, min_length=1),
     store: ThinkStore = Depends(get_store),
-) -> SessionPage:
-    filters: dict = {}  # no filter parameters; cursor bound to the empty filter set
-    inner = decode_scoped_cursor(cursor, filters) if cursor else None
-    rows, next_inner = store.list_sessions(limit, inner)
-    return SessionPage(
-        items=[_session_payload(row) for row in rows],
-        next_cursor=encode_scoped_cursor(next_inner, filters) if next_inner else None,
-        has_more=next_inner is not None,
-    )
+) -> list[Session]:
+    rows = store.list_sessions(limit)
+    return [_session_payload(row) for row in rows]
 
 
 @router.get("/{session_id}", operation_id="show_session", summary="Show session")

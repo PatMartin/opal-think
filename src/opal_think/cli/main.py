@@ -243,20 +243,15 @@ def session_add(
 def session_list(
     ctx: typer.Context,
     limit: int = typer.Option(50, "--limit", min=1, max=200),
-    cursor: str = typer.Option(None, "--cursor", help="Continuation token from a previous list"),
 ) -> None:
     """List sessions, newest updated first."""
     params: dict[str, Any] = {"limit": limit}
-    if cursor:
-        params["cursor"] = cursor
     data = _call(ctx, "GET", "/api/v1/session/", params=params).json()
     if _state(ctx).json_output:
         _emit(ctx, data)
         return
-    for item in data["items"]:
+    for item in data:
         typer.echo(f"{item['id']}  {item['title'] or '-'}  tasks={item['task_count']}  updated={item['updated_at']}")
-    if data["next_cursor"]:
-        typer.echo(f"next_cursor: {data['next_cursor']}", err=True)
 
 
 @sessions_app.command("show")
@@ -361,7 +356,6 @@ def task_list(
     status: str = typer.Option(None, "--status", help="queued|running|completed|failed|cancelled|timed_out"),
     session_id: str = typer.Option(None, "--session-id"),
     limit: int = typer.Option(50, "--limit", min=1, max=200),
-    cursor: str = typer.Option(None, "--cursor"),
 ) -> None:
     """List retained tasks, newest first."""
     params: dict[str, Any] = {"limit": limit}
@@ -369,16 +363,12 @@ def task_list(
         params["status"] = status
     if session_id:
         params["session_id"] = session_id
-    if cursor:
-        params["cursor"] = cursor
     data = _call(ctx, "GET", "/api/v1/task/", params=params).json()
     if _state(ctx).json_output:
         _emit(ctx, data)
         return
-    for t in data["items"]:
+    for t in data:
         typer.echo(f"{t['id']}  {t['status']:<10}  {t['model_id']}  {t['prompt'][:60]}")
-    if data["next_cursor"]:
-        typer.echo(f"next_cursor: {data['next_cursor']}", err=True)
 
 
 @tasks_app.command("show")
