@@ -44,7 +44,10 @@
   <button data-view="sessions">Sessions</button>
   <button data-view="models">Models</button>
   <button data-view="personas">Personas</button>
+  <button data-view="profiles">Profiles</button>
   <button data-view="settings">Settings</button>
+  <button data-view="backup">Backup</button>
+  <button data-view="service">Service</button>
 </nav>
 <main>
   <section id="view-ask" class="panel">
@@ -89,6 +92,32 @@
     <p class="muted">Portable service settings. Overrides are marked <span class="pill set">set</span>; edits are guarded by a strong ETag.</p>
     <table id="settings-table"><thead><tr><th>Key</th><th>Value</th><th>Default</th><th></th></tr></thead><tbody></tbody></table>
     <p id="settings-pending" class="muted"></p>
+  </section>
+  <section id="view-profiles" class="panel hidden">
+    <h2>Profiles <button class="small" id="profile-new">New profile</button></h2>
+    <p class="muted">Named presets of portable defaults. Activating a profile applies its <code>settings</code>
+      preset; other service compartments are stored verbatim. Exactly one profile is active.</p>
+    <table id="profiles-table"><thead><tr><th>ID</th><th>Name</th><th>Active</th><th>Settings</th><th>Other sections</th><th></th></tr></thead><tbody></tbody></table>
+    <div id="profile-detail" class="panel hidden"></div>
+  </section>
+  <section id="view-backup" class="panel hidden">
+    <h2>Backup
+      <button class="small" id="backup-create">Create archive</button>
+      <button class="small" id="backup-export">Export</button>
+      <button class="small" id="backup-import">Import</button></h2>
+    <p class="muted">Portable configuration archives (settings, personas, profiles — never secrets or history).
+      Import and restore are atomic and guarded by the configuration ETag.</p>
+    <table id="backups-table"><thead><tr><th>Filename</th><th>Size</th><th>Created</th><th></th></tr></thead><tbody></tbody></table>
+    <div id="backup-detail" class="panel hidden"></div>
+  </section>
+  <section id="view-service" class="panel hidden">
+    <h2>Service
+      <button class="small" id="service-start">Start</button>
+      <button class="small" id="service-stop">Stop</button>
+      <button class="small" id="service-log-refresh">Refresh log</button></h2>
+    <p class="muted">Managed server process (pidfile-tracked). <code>start</code> doubles as restart.</p>
+    <div id="service-status" class="panel hidden"></div>
+    <pre id="service-log" class="panel"></pre>
   </section>
 </main>
 <div id="toast"></div>
@@ -164,7 +193,7 @@ async function refreshHealth() {
 }
 
 // ---- views ----
-const loaders = { settings: loadSettings, sessions: loadSessions, models: loadModels, tasks: loadTasks, ask: loadAsk, personas: loadPersonas };
+const loaders = { settings: loadSettings, sessions: loadSessions, models: loadModels, tasks: loadTasks, ask: loadAsk, personas: loadPersonas, profiles: loadProfiles, backup: loadBackups, service: loadService };
 document.querySelectorAll("nav button").forEach((btn) => btn.addEventListener("click", () => {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === btn));
   document.querySelectorAll("main section").forEach((s) => s.classList.add("hidden"));
@@ -395,6 +424,220 @@ async function validatePersona(id) {
     detail.replaceChildren(...nodes);
   } catch (e) { detail.replaceChildren(muted(`validate: ${e.message}`)); }
 }
+
+// ---- profiles ----
+// Profiles share the portable-configuration revision ("s<n>"): every mutation
+// carries If-Match. `settings` is think's preset compartment; foreign service
+// compartments are shown but never edited here.
+let profilesEtag = null;
+
+async function configEtag() {
+  if (profilesEtag) return profilesEtag;
+  return (await api("/api/v1/profile/")).etag;
+}
+
+async function loadProfiles() {
+  const tbody = $("#profiles-table tbody");
+  tbody.replaceChildren(mutedRow(6, "Loading…"));
+  try {
+    const { body, etag } = await api("/api/v1/profile/");
+    profilesEtag = etag;
+    tbody.replaceChildren();
+    for (const p of body) {
+      const foreign = Object.keys(p).filter((k) => !["id", "name", "description", "is_active", "settings", "created_at", "updated_at"].includes(k));
+      const tr = el("tr", {},
+        tdText(p.id), tdText(p.name),
+        td(p.is_active ? pill("active", "set") : pill("—")),
+        tdText(p.settings ? JSON.stringify(p.settings) : null, "muted"),
+        tdText(foreign.join(", ") || null, "muted"), td());
+      const actions = tr.lastElementChild;
+      const show = document.createElement("button");
+      show.className = "small"; show.textContent = "Show";
+      show.onclick = () => showProfile(p.id);
+      const activate = document.createElement("button");
+      activate.className = "small"; activate.textContent = "Activate"; activate.style.marginLeft = ".4rem";
+      activate.onclick = () => activateProfile(p.id);
+      const edit = document.createElement("button");
+      edit.className = "small"; edit.textContent = "Edit"; edit.style.marginLeft = ".4rem";
+      edit.onclick = () => editProfile(p);
+      const del = document.createElement("button");
+      del.className = "small"; del.textContent = "Remove"; del.style.marginLeft = ".4rem";
+      del.onclick = () => removeProfile(p.id);
+      actions.append(show, activate, edit, del);
+      tbody.appendChild(tr);
+    }
+    if (!body.length) tbody.appendChild(mutedRow(6, "No profiles configured."));
+  } catch (e) {
+    tbody.replaceChildren(mutedRow(6, `Profile catalog unavailable: ${e.message}`));
+  }
+}
+
+$("#profile-new").addEventListener("click", async () => {
+  const name = prompt("Profile name:");
+  if (!name) return;
+  const raw = prompt('Settings preset as JSON object (e.g. {"task.default_max_steps": 4}; empty = none):', "");
+  let settings = null;
+  if (raw) {
+    try { settings = JSON.parse(raw); } catch (_) { toast("settings preset must be a JSON object"); return; }
+    if (typeof settings !== "object" || settings === null || Array.isArray(settings)) { toast("settings preset must be a JSON object"); return; }
+  }
+  const body = { name, is_active: confirm("Activate this profile now (applies its preset)?") };
+  if (settings) body.settings = settings;
+  try {
+    await api("/api/v1/profile/", { method: "POST", headers: { "If-Match": await configEtag() }, body: JSON.stringify(body) });
+    toast(`profile ${name} created`, false);
+    loadProfiles();
+  } catch (e) { toast(`profile: ${e.message}`); }
+});
+
+async function showProfile(id) {
+  const detail = $("#profile-detail");
+  detail.classList.remove("hidden");
+  try {
+    const { body } = await api(`/api/v1/profile/${id}`);
+    detail.replaceChildren(
+      el("p", {}, code(body.name), " ", pill(body.is_active ? "active" : "inactive", body.is_active ? "set" : "")),
+      el("pre", { text: JSON.stringify(body, null, 2), style: "white-space:pre-wrap" }));
+  } catch (e) { detail.replaceChildren(muted(`profile: ${e.message}`)); }
+}
+
+async function editProfile(p) {
+  const name = prompt(`Name for profile ${p.id} (blank keeps "${p.name}"):`, "");
+  const raw = prompt('Settings preset JSON (blank keeps current; "{}" clears):', "");
+  const body = {};
+  if (name) body.name = name;
+  if (raw === "{}") body.settings = null;
+  else if (raw) {
+    try { body.settings = JSON.parse(raw); } catch (_) { toast("settings preset must be a JSON object"); return; }
+  }
+  if (!Object.keys(body).length) return;
+  try {
+    const { etag } = await api(`/api/v1/profile/${p.id}`);
+    await api(`/api/v1/profile/${p.id}`, { method: "PATCH", headers: { "If-Match": etag }, body: JSON.stringify(body) });
+    toast(`profile ${p.id} updated`, false);
+    loadProfiles();
+  } catch (e) { toast(`profile ${p.id}: ${e.message}`); }
+}
+
+async function activateProfile(id) {
+  if (!confirm(`Activate profile ${id}? Its settings preset is applied to live settings.`)) return;
+  try {
+    const { etag } = await api(`/api/v1/profile/${id}`);
+    await api(`/api/v1/profile/${id}/activate`, { method: "POST", headers: { "If-Match": etag }, body: "{}" });
+    toast(`profile ${id} activated`, false);
+    loadProfiles();
+  } catch (e) { toast(`profile ${id}: ${e.message}`); }
+}
+
+async function removeProfile(id) {
+  if (!confirm(`Remove profile ${id}?`)) return;
+  try {
+    const { etag } = await api(`/api/v1/profile/${id}`);
+    await api(`/api/v1/profile/${id}`, { method: "DELETE", headers: { "If-Match": etag } });
+    toast(`profile ${id} removed`, false);
+    loadProfiles();
+  } catch (e) { toast(`profile ${id}: ${e.message}`); }
+}
+
+// ---- backup ----
+async function loadBackups() {
+  const tbody = $("#backups-table tbody");
+  tbody.replaceChildren(mutedRow(4, "Loading…"));
+  try {
+    const { body } = await api("/api/v1/backup/list");
+    tbody.replaceChildren();
+    for (const b of body) {
+      const tr = el("tr", {}, td(code(b.filename)), tdText(b.size_bytes, "muted"), tdText(b.created_at, "muted"), td());
+      const actions = tr.lastElementChild;
+      const restore = document.createElement("button");
+      restore.className = "small"; restore.textContent = "Restore";
+      restore.onclick = () => restoreBackup(b.filename);
+      const del = document.createElement("button");
+      del.className = "small"; del.textContent = "Remove"; del.style.marginLeft = ".4rem";
+      del.onclick = () => removeBackup(b.filename);
+      actions.append(restore, del);
+      tbody.appendChild(tr);
+    }
+    if (!body.length) tbody.appendChild(mutedRow(4, "No archives."));
+  } catch (e) {
+    tbody.replaceChildren(mutedRow(4, `Backup catalog unavailable: ${e.message}`));
+  }
+}
+
+$("#backup-create").addEventListener("click", async () => {
+  try {
+    const { body } = await api("/api/v1/backup/create", { method: "POST", body: "{}" });
+    toast(`backup ${body.filename} created`, false);
+    loadBackups();
+  } catch (e) { toast(`backup: ${e.message}`); }
+});
+
+$("#backup-export").addEventListener("click", async () => {
+  const detail = $("#backup-detail");
+  detail.classList.remove("hidden");
+  try {
+    const { body } = await api("/api/v1/backup/export");
+    detail.replaceChildren(el("pre", { text: JSON.stringify(body, null, 2), style: "white-space:pre-wrap" }));
+  } catch (e) { detail.replaceChildren(muted(`export: ${e.message}`)); }
+});
+
+$("#backup-import").addEventListener("click", async () => {
+  const raw = prompt("Configuration bundle JSON to import:");
+  if (raw === null) return;
+  let bundle;
+  try { bundle = JSON.parse(raw); } catch (_) { toast("import requires a JSON bundle"); return; }
+  if (!confirm("Import replaces the portable configuration (settings, personas, profiles) atomically. Continue?")) return;
+  try {
+    const { etag } = await api("/api/v1/setting/");
+    const { body } = await api("/api/v1/backup/import", { method: "POST", headers: { "If-Match": etag }, body: JSON.stringify(bundle) });
+    toast(`imported: ${JSON.stringify(body.counts ?? {})}`, false);
+    loadBackups();
+  } catch (e) { toast(`import: ${e.message}`); }
+});
+
+async function restoreBackup(filename) {
+  if (!confirm(`Restore ${filename}? The portable configuration is replaced atomically.`)) return;
+  try {
+    const { etag } = await api("/api/v1/setting/");
+    const { body } = await api(`/api/v1/backup/restore/${encodeURIComponent(filename)}`, { method: "POST", headers: { "If-Match": etag }, body: "{}" });
+    toast(`restored ${filename}: ${JSON.stringify(body.counts ?? {})}`, false);
+    loadBackups();
+  } catch (e) { toast(`restore: ${e.message}`); }
+}
+
+async function removeBackup(filename) {
+  if (!confirm(`Delete archive ${filename}?`)) return;
+  try {
+    await api(`/api/v1/backup/${encodeURIComponent(filename)}`, { method: "DELETE" });
+    toast(`${filename} removed`, false);
+    loadBackups();
+  } catch (e) { toast(`backup: ${e.message}`); }
+}
+
+// ---- service ----
+async function loadService() {
+  try {
+    const { body } = await api("/api/v1/service/log", { headers: { "Accept": "application/json" } });
+    $("#service-log").textContent = body.lines.join("\n") || "(log is empty)";
+  } catch (e) {
+    $("#service-log").textContent = `(no service log: ${e.message})`;
+  }
+}
+
+$("#service-log-refresh").addEventListener("click", loadService);
+
+async function serviceOp(op) {
+  const status = $("#service-status");
+  status.classList.remove("hidden");
+  try {
+    const { body } = await api(`/api/v1/service/${op}`, { method: "POST", body: "{}" });
+    status.replaceChildren(el("p", { text: `${op}: state=${body.state} pid=${body.pid ?? "—"} previous_pid=${body.previous_pid ?? "—"}` }));
+    loadService();
+  } catch (e) { status.replaceChildren(muted(`service ${op}: ${e.message}`)); }
+}
+
+$("#service-start").addEventListener("click", () => serviceOp("start"));
+$("#service-stop").addEventListener("click", () => serviceOp("stop"));
 
 // ---- ask + tasks ----
 const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out"]);

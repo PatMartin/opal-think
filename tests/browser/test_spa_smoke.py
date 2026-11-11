@@ -218,6 +218,50 @@ def test_persona_lifecycle(page) -> None:
     assert page.locator("#personas-table tbody tr", has_text="amy").count() == 0
 
 
+def test_profile_lifecycle(page) -> None:
+    """Profiles view: create (dialog-driven), activate exclusivity, remove."""
+    _view(page, "profiles")
+    page.wait_for_selector("#profiles-table tbody", timeout=15000)
+    with _dialogs(page, "alpha", "", ""):  # name, settings JSON (empty), confirm activate -> yes
+        page.click("#profile-new")
+        page.wait_for_selector("#profiles-table tbody tr:has-text('alpha')", timeout=15000)
+    with _dialogs(page, "beta", "", ""):  # beta becomes the active one; alpha is now removable
+        page.click("#profile-new")
+        page.wait_for_selector("#profiles-table tbody tr:has-text('beta')", timeout=15000)
+    with _dialogs(page, ""):  # confirm() -> remove inactive alpha
+        page.locator("#profiles-table tbody tr", has_text="alpha").locator("button", has_text="Remove").click()
+        page.wait_for_timeout(2000)
+    assert page.locator("#profiles-table tbody tr", has_text="alpha").count() == 0
+    row = page.locator("#profiles-table tbody tr", has_text="beta")
+    assert row.count() == 1 and "active" in row.inner_text()
+
+
+def test_backup_lifecycle(page) -> None:
+    """Backup view: create archive -> row appears, export renders bundle, remove."""
+    _view(page, "backup")
+    page.click("#backup-create")
+    row = page.locator("#backups-table tbody tr", has_text="opal-think-")
+    row.wait_for(timeout=15000)
+    page.click("#backup-export")
+    page.wait_for_function(
+        "() => document.getElementById('backup-detail').innerText.includes('format_version')",
+        timeout=15000,
+    )
+    with _dialogs(page, ""):  # confirm() -> delete archive
+        row.locator("button", has_text="Remove").click()
+        page.wait_for_timeout(2000)
+    assert page.locator("#backups-table tbody tr", has_text="opal-think-").count() == 0
+
+
+def test_service_view_renders(page) -> None:
+    """Service view renders the log tail panel (start/stop not exercised in-browser)."""
+    _view(page, "service")
+    page.wait_for_function(
+        "() => document.getElementById('service-log').innerText.length > 0",
+        timeout=15000,
+    )
+
+
 def test_health_banner_shows_status(page) -> None:
     banner = page.locator("#health-banner").inner_text().lower()
     assert "ok" in banner or "ready" in banner or "model" in banner
