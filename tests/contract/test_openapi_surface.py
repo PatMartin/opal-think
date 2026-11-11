@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from importlib import resources
 
-import pytest
 import yaml
 from fastapi.testclient import TestClient
 

@@ -173,8 +173,8 @@ model work can be accepted.
 
 ```bash
 # Copy
-opal think health --live
-opal think health --ready
+opal think info live
+opal think info ready
 ```
 
 ### 16. Temporarily tune a guarded task budget
@@ -184,18 +184,18 @@ numbers are unquoted.
 
 ```bash
 # Copy
-opal think setting show task.default_max_steps
-opal think setting set task.default_max_steps 8
-opal think setting remove task.default_max_steps
+opal think config setting show task.default_max_steps
+opal think config setting set task.default_max_steps 8
+opal think config setting remove task.default_max_steps
 ```
 
 ### 17. Point THINK at a development Ollama server
 
 ```bash
 # Copy
-opal think setting set providers.ollama.base_url '"http://127.0.0.1:11434"'
-opal think setting set providers.ollama.enabled true
-opal think health --ready
+opal think config setting set providers.ollama.base_url '"http://127.0.0.1:11434"'
+opal think config setting set providers.ollama.enabled true
+opal think info ready
 ```
 
 ### 18. Run a strict bounded answer for a latency-sensitive workflow
@@ -520,7 +520,7 @@ and rollback considerations.'
 ## Production notes
 
 - Configure THINK's EVENT connection with settings references, never raw secret
-  values: for example, `opal think setting set event.credential_ref
+  values: for example, `opal think config setting set event.credential_ref
   '"env:OPAL_EVENT_TOKEN"'`.
 - Let EVENT own action definitions, authorization, dispatch, execution status,
   and durable side-effect records. THINK is the guarded planner and decision

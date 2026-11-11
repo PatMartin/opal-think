@@ -19,11 +19,11 @@ opal think ask "what is 2+2"
 ```
 
 `providers.ollama.enabled` defaults true at `http://127.0.0.1:11434` (retarget via
-`opal think setting set providers.ollama.base_url '"http://HOST:11434"'`). With no
+`opal think config setting set providers.ollama.base_url '"http://HOST:11434"'`). With no
 reachable provider, readiness honestly returns 503. To run the service detached,
 `opal think service start|log|stop` manages a background process under `logs/`.
 
-## REST → CLI → SPA parity (all 27 contract operations)
+## REST → CLI → SPA parity (all 44 contract operations)
 
 | REST | CLI | SPA |
 |---|---|---|
@@ -34,9 +34,13 @@ reachable provider, readiness honestly returns 503. To run the service detached,
 | POST /task/{id}/cancel | `task cancel` | — (button pending) |
 | POST·GET·GET·DELETE /session | `session add/list/show/remove` | Sessions view |
 | GET /model/·/model/{id} | `model list/show` | Models view |
-| GET·POST /persona/, GET·PATCH·DELETE /persona/{id}, POST /persona/{id}/validate | `persona list/create/show/update/remove/validate` | Personas view |
-| GET·PATCH /setting/, GET·PUT·DELETE /setting/{key} | `setting list/show/set/remove` | Settings view |
-| GET /health/·live·ready | `info health [--live --ready]` | Status banner |
+| GET·POST /persona/, GET·PATCH·DELETE /persona/{id}, POST /persona/{id}/validate | `config persona list/add/show/update/remove/validate` | Personas view |
+| GET·PATCH /setting/, GET·PUT·DELETE /setting/{key} | `config setting list/update/show/set/remove` | Settings view |
+| GET·POST /profile/, GET·PATCH·DELETE /profile/{id}, POST /profile/{id}/activate | `config profile list/add/show/update/remove/activate` | Profiles view |
+| GET /backup/export, POST /backup/validate·/backup/import | `backup export/validate/import` | Backup view |
+| GET /backup/list, POST /backup/create, GET /backup/download/{f}, POST /backup/restore/{f}, DELETE /backup/{f} | `backup list/create/download/restore/remove` | Backup view |
+| POST /service/start·/service/stop, GET /service/log | `service start/stop/log` | Service view |
+| GET /health/·live·ready | `info health`, `info live`, `info ready` | Status banner |
 | GET /info/·/info/ping | `info version`, `info ping` | — |
 
 ## Semantics
