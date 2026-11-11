@@ -53,38 +53,38 @@ def test_ping(api) -> None:
 def test_persona_lifecycle(api) -> None:
     create = runner.invoke(
         cli_main.think_app,
-        ["persona", "create", "amy", "--name", "Amy", "--voice-id", "en-gb-alan-low"],
+        ["config", "persona", "add", "amy", "--name", "Amy", "--voice-id", "en-gb-alan-low"],
     )
     assert create.exit_code == 0, create.output
     assert api.get("/api/v1/persona/amy").status_code == 200
 
-    listed = runner.invoke(cli_main.think_app, ["--json", "persona", "list"])
+    listed = runner.invoke(cli_main.think_app, ["--json", "config", "persona", "list"])
     assert listed.exit_code == 0
     assert [p["persona_id"] for p in json.loads(listed.output)] == ["amy"]
 
-    shown = runner.invoke(cli_main.think_app, ["persona", "show", "amy"])
+    shown = runner.invoke(cli_main.think_app, ["config", "persona", "show", "amy"])
     assert shown.exit_code == 0
     assert json.loads(shown.output)["voice_id"] == "en-gb-alan-low"
 
-    updated = runner.invoke(cli_main.think_app, ["persona", "update", "amy", "--name", "Amy Prime", "--clear-voice"])
+    updated = runner.invoke(cli_main.think_app, ["config", "persona", "update", "amy", "--name", "Amy Prime", "--clear-voice"])
     assert updated.exit_code == 0, updated.output
     body = api.get("/api/v1/persona/amy").json()
     assert body["name"] == "Amy Prime" and body["voice_id"] is None
 
-    removed = runner.invoke(cli_main.think_app, ["persona", "remove", "amy"])
+    removed = runner.invoke(cli_main.think_app, ["config", "persona", "remove", "amy"])
     assert removed.exit_code == 0
     assert api.get("/api/v1/persona/amy").status_code == 404
 
 
 def test_persona_update_requires_a_field(api) -> None:
-    runner.invoke(cli_main.think_app, ["persona", "create", "amy", "--name", "Amy"])
-    result = runner.invoke(cli_main.think_app, ["persona", "update", "amy"])
+    runner.invoke(cli_main.think_app, ["config", "persona", "add", "amy", "--name", "Amy"])
+    result = runner.invoke(cli_main.think_app, ["config", "persona", "update", "amy"])
     assert result.exit_code == 1
     assert "nothing to update" in result.output
 
 
 def test_persona_validate(api) -> None:
-    runner.invoke(cli_main.think_app, ["persona", "create", "amy", "--name", "Amy", "--disabled"])
-    result = runner.invoke(cli_main.think_app, ["persona", "validate", "amy"])
+    runner.invoke(cli_main.think_app, ["config", "persona", "add", "amy", "--name", "Amy", "--disabled"])
+    result = runner.invoke(cli_main.think_app, ["config", "persona", "validate", "amy"])
     assert result.exit_code == 1
     assert "disabled" in result.output

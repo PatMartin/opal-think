@@ -42,13 +42,13 @@ def api(tmp_path, monkeypatch):
 
 
 def test_settings_list(api) -> None:
-    result = runner.invoke(cli_main.think_app, ["setting", "list"])
+    result = runner.invoke(cli_main.think_app, ["config", "setting", "list"])
     assert result.exit_code == 0, result.output
     assert "task.max_concurrent = 4" in result.output
 
 
 def test_settings_list_json(api) -> None:
-    result = runner.invoke(cli_main.think_app, ["--json", "setting", "list"])
+    result = runner.invoke(cli_main.think_app, ["--json", "config", "setting", "list"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["task.max_concurrent"] == 4
@@ -56,29 +56,29 @@ def test_settings_list_json(api) -> None:
 
 
 def test_settings_show(api) -> None:
-    result = runner.invoke(cli_main.think_app, ["setting", "show", "task.max_concurrent"])
+    result = runner.invoke(cli_main.think_app, ["config", "setting", "show", "task.max_concurrent"])
     assert result.exit_code == 0
     assert json.loads(result.output)["value"] == 4
 
 
 def test_settings_set_and_remove(api) -> None:
-    result = runner.invoke(cli_main.think_app, ["setting", "set", "task.max_concurrent", "8"])
+    result = runner.invoke(cli_main.think_app, ["config", "setting", "set", "task.max_concurrent", "8"])
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["value"] == 8
     # server actually persisted it (proves the ETag auto-fetch worked)
     assert api.get("/api/v1/setting/task.max_concurrent").json()["value"] == 8
-    result = runner.invoke(cli_main.think_app, ["setting", "remove", "task.max_concurrent"])
+    result = runner.invoke(cli_main.think_app, ["config", "setting", "remove", "task.max_concurrent"])
     assert result.exit_code == 0
     assert api.get("/api/v1/setting/task.max_concurrent").json()["value"] == 4
 
 
 def test_settings_set_string_value(api) -> None:
-    result = runner.invoke(cli_main.think_app, ["setting", "set", "models.default_id", "ollama:llama3.2"])
+    result = runner.invoke(cli_main.think_app, ["config", "setting", "set", "models.default_id", "ollama:llama3.2"])
     assert result.exit_code == 0
     assert api.get("/api/v1/setting/models.default_id").json()["value"] == "ollama:llama3.2"
 
 
 def test_settings_error_exit(api) -> None:
-    result = runner.invoke(cli_main.think_app, ["setting", "show", "nope.nope"])
+    result = runner.invoke(cli_main.think_app, ["config", "setting", "show", "nope.nope"])
     assert result.exit_code == 1
     assert "unknown setting key" in result.output or "error:" in result.output

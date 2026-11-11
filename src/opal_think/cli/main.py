@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -30,22 +28,30 @@ class CliState:
 think_app = typer.Typer(
     help="OPAL Think: guarded reasoning service.", no_args_is_help=True, pretty_exceptions_enable=False
 )
-settings_app = typer.Typer(help="Portable service settings (strong-ETag guarded).", no_args_is_help=True)
 sessions_app = typer.Typer(help="Optional conversation context containers.", no_args_is_help=True)
 models_app = typer.Typer(help="Discovered model catalog (read-only).", no_args_is_help=True)
 tasks_app = typer.Typer(
     help="Task lifecycle: create submits work, list/show inspect it, watch streams it to a terminal state, "
     "cancel requests cooperative cancellation. `ask` and `chat` are shortcuts over this same lifecycle.",
     no_args_is_help=True)
-personas_app = typer.Typer(help="Named assistant personas (shared OPAL identities).", no_args_is_help=True)
 info_app = typer.Typer(help="Service identity, version and health probes.", no_args_is_help=True)
-think_app.add_typer(settings_app, name="setting")
+backup_app = typer.Typer(help="Portable configuration export, archives and restore.", no_args_is_help=True)
+service_app = typer.Typer(help="Managed opal-think-svc process lifecycle.", no_args_is_help=True)
+# Canonical x-opal-cli bindings (v1.7.1): `config` parents the portable-configuration
+# groups — setting, persona, profile.
+config_app = typer.Typer(help="Portable configuration resources.", no_args_is_help=True)
+config_setting_app = typer.Typer(help="Portable service settings (strong-ETag guarded).", no_args_is_help=True)
+config_persona_app = typer.Typer(help="Named assistant personas (shared OPAL identities).", no_args_is_help=True)
+config_profile_app = typer.Typer(help="Named presets of portable operating defaults.", no_args_is_help=True)
+config_app.add_typer(config_setting_app, name="setting")
+config_app.add_typer(config_persona_app, name="persona")
+config_app.add_typer(config_profile_app, name="profile")
 think_app.add_typer(sessions_app, name="session")
 think_app.add_typer(models_app, name="model")
 think_app.add_typer(tasks_app, name="task")
-think_app.add_typer(personas_app, name="persona")
 think_app.add_typer(info_app, name="info")
-service_app = typer.Typer(help="Run the local opal-think-svc process.", no_args_is_help=True)
+think_app.add_typer(config_app, name="config")
+think_app.add_typer(backup_app, name="backup")
 think_app.add_typer(service_app, name="service")
 
 _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
@@ -117,14 +123,21 @@ def _emit_human(data: Any) -> None:
 
 
 @info_app.command("health")
-def health(
-    ctx: typer.Context,
-    live: bool = typer.Option(False, "--live", help="Liveness probe (process serving)"),
-    ready: bool = typer.Option(False, "--ready", help="Readiness probe (usable model)"),
-) -> None:
-    """Service health: overall status, or --live / --ready probes."""
-    path = "/api/v1/health/live" if live else "/api/v1/health/ready" if ready else "/api/v1/health/"
-    _emit(ctx, _call(ctx, "GET", path).json())
+def health(ctx: typer.Context) -> None:
+    """Service health: overall status, model availability and EVENT state."""
+    _emit(ctx, _call(ctx, "GET", "/api/v1/health/").json())
+
+
+@info_app.command("live")
+def live(ctx: typer.Context) -> None:
+    """Liveness probe (process serving)."""
+    _emit(ctx, _call(ctx, "GET", "/api/v1/health/live").json())
+
+
+@info_app.command("ready")
+def ready(ctx: typer.Context) -> None:
+    """Readiness probe (a usable model is configured and available)."""
+    _emit(ctx, _call(ctx, "GET", "/api/v1/health/ready").json())
 
 
 @info_app.command("version")
@@ -172,7 +185,7 @@ def _setting_etag(ctx: typer.Context, key: str) -> str:
     return _call(ctx, "GET", f"/api/v1/setting/{key}").headers["ETag"]
 
 
-@settings_app.command("list")
+@config_setting_app.command("list")
 def settings_list(ctx: typer.Context) -> None:
     """List registered settings (portable values; secrets shown as references)."""
     data = _call(ctx, "GET", "/api/v1/setting/").json()
@@ -192,13 +205,13 @@ def settings_list(ctx: typer.Context) -> None:
         typer.echo(f"pending_restart_fields: {', '.join(data['pending_restart_fields'])}", err=True)
 
 
-@settings_app.command("show")
+@config_setting_app.command("show")
 def settings_show(ctx: typer.Context, key: str) -> None:
     """Show one registered setting."""
     _emit(ctx, _call(ctx, "GET", f"/api/v1/setting/{key}").json())
 
 
-@settings_app.command("set")
+@config_setting_app.command("set")
 def settings_set(
     ctx: typer.Context,
     key: str,
@@ -211,7 +224,7 @@ def settings_set(
     _emit(ctx, response.json())
 
 
-@settings_app.command("remove")
+@config_setting_app.command("remove")
 def settings_remove(
     ctx: typer.Context,
     key: str,
@@ -221,6 +234,134 @@ def settings_remove(
     etag = if_match or _setting_etag(ctx, key)
     _call(ctx, "DELETE", f"/api/v1/setting/{key}", headers={"If-Match": etag})
     typer.echo(f"{key}: reset to default")
+
+
+@config_setting_app.command("update")
+def settings_update(
+    ctx: typer.Context,
+    patch: str = typer.Argument(..., help="JSON object of setting key -> value pairs to apply atomically"),
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Atomically update several settings (PATCH the collection; auto-fetches the config ETag)."""
+    try:
+        body = json.loads(patch)
+    except ValueError as exc:
+        typer.echo(f"error: patch must be a JSON object: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    if not isinstance(body, dict):
+        typer.echo("error: patch must be a JSON object", err=True)
+        raise typer.Exit(1)
+    etag = if_match or _call(ctx, "GET", "/api/v1/setting/").headers["ETag"]
+    _emit(ctx, _call(ctx, "PATCH", "/api/v1/setting/", json=body, headers={"If-Match": etag}).json())
+
+
+# -- config profile (named presets of portable defaults) ----------------------------------------------
+
+
+@config_profile_app.command("list")
+def profile_list(ctx: typer.Context) -> None:
+    """List profiles (complete bounded catalog; no pagination)."""
+    data = _call(ctx, "GET", "/api/v1/profile/").json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+        return
+    for p in data:
+        active = " *active*" if p.get("is_active") else ""
+        settings = json.dumps(p["settings"]) if p.get("settings") else "-"
+        typer.echo(f"{p['id']}  {p['name']}{active}  settings={settings}")
+
+
+def _profile_etag(ctx: typer.Context, profile_id: int) -> str:
+    return _call(ctx, "GET", f"/api/v1/profile/{profile_id}").headers["ETag"]
+
+
+@config_profile_app.command("add")
+def profile_add(
+    ctx: typer.Context,
+    name: str,
+    settings: str = typer.Option(None, "--settings", help="JSON preset of portable setting key -> value pairs"),
+    description: str = typer.Option(None, "--description"),
+    profile_id: int = typer.Option(None, "--id", help="Client-supplied numeric profile id"),
+    active: bool = typer.Option(False, "--active", help="Make this the active profile (applies the preset)"),
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Create a named preset of portable setting defaults (auto-fetches the config ETag)."""
+    body: dict[str, Any] = {"name": name, "is_active": active}
+    if profile_id is not None:
+        body["id"] = profile_id
+    if description is not None:
+        body["description"] = description
+    if settings is not None:
+        try:
+            body["settings"] = json.loads(settings)
+        except ValueError as exc:
+            typer.echo(f"error: --settings must be a JSON object: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        if not isinstance(body["settings"], dict):
+            typer.echo("error: --settings must be a JSON object", err=True)
+            raise typer.Exit(1)
+    etag = if_match or _config_etag(ctx)
+    _emit(ctx, _call(ctx, "POST", "/api/v1/profile/", json=body, headers={"If-Match": etag}).json())
+
+
+@config_profile_app.command("show")
+def profile_show(ctx: typer.Context, profile_id: int) -> None:
+    """Show one profile, including all service compartments."""
+    _emit(ctx, _call(ctx, "GET", f"/api/v1/profile/{profile_id}").json())
+
+
+@config_profile_app.command("update")
+def profile_update(
+    ctx: typer.Context,
+    profile_id: int,
+    name: str = typer.Option(None, "--name"),
+    description: str = typer.Option(None, "--description"),
+    settings: str = typer.Option(None, "--settings", help="JSON preset replacing the settings compartment"),
+    active: bool = typer.Option(None, "--active/--inactive", help="Activate (applies preset) / deactivate"),
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Partially update a profile (auto-fetches the config ETag)."""
+    body: dict[str, Any] = {}
+    if name is not None:
+        body["name"] = name
+    if description is not None:
+        body["description"] = description
+    if active is not None:
+        body["is_active"] = active
+    if settings is not None:
+        try:
+            body["settings"] = json.loads(settings)
+        except ValueError as exc:
+            typer.echo(f"error: --settings must be a JSON object: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    if not body:
+        typer.echo("error: nothing to update (pass at least one field option)", err=True)
+        raise typer.Exit(1)
+    etag = if_match or _profile_etag(ctx, profile_id)
+    _emit(ctx, _call(ctx, "PATCH", f"/api/v1/profile/{profile_id}", json=body, headers={"If-Match": etag}).json())
+
+
+@config_profile_app.command("remove")
+def profile_remove(
+    ctx: typer.Context,
+    profile_id: int,
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Remove a profile (409 while it is the active profile; auto-fetches the config ETag)."""
+    etag = if_match or _profile_etag(ctx, profile_id)
+    _call(ctx, "DELETE", f"/api/v1/profile/{profile_id}", headers={"If-Match": etag})
+    typer.echo(f"{profile_id}: removed")
+
+
+@config_profile_app.command("activate")
+def profile_activate(
+    ctx: typer.Context,
+    profile_id: int,
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Make this profile the only active one and apply its settings preset."""
+    etag = if_match or _profile_etag(ctx, profile_id)
+    _emit(ctx, _call(ctx, "POST", f"/api/v1/profile/{profile_id}/activate", headers={"If-Match": etag}).json())
 
 
 # -- session -----------------------------------------------------------------------------------
@@ -455,7 +596,7 @@ def _persona_etag(ctx: typer.Context, persona_id: str) -> str:
     return _call(ctx, "GET", f"/api/v1/persona/{persona_id}").headers["ETag"]
 
 
-@personas_app.command("list")
+@config_persona_app.command("list")
 def persona_list(
     ctx: typer.Context,
     enabled: bool = typer.Option(None, "--enabled/--disabled", help="Filter by enabled state"),
@@ -471,7 +612,7 @@ def persona_list(
         typer.echo(f"{p['persona_id']}  {p['name']}  enabled={p['enabled']}  voice={voice}")
 
 
-@personas_app.command("create")
+@config_persona_app.command("add")
 def persona_create(
     ctx: typer.Context,
     persona_id: str,
@@ -495,13 +636,13 @@ def persona_create(
         typer.echo(f"persona_id: {data['persona_id']}")
 
 
-@personas_app.command("show")
+@config_persona_app.command("show")
 def persona_show(ctx: typer.Context, persona_id: str) -> None:
     """Show one registered persona."""
     _emit(ctx, _call(ctx, "GET", f"/api/v1/persona/{persona_id}").json())
 
 
-@personas_app.command("update")
+@config_persona_app.command("update")
 def persona_update(
     ctx: typer.Context,
     persona_id: str,
@@ -534,7 +675,7 @@ def persona_update(
     _emit(ctx, _call(ctx, "PATCH", f"/api/v1/persona/{persona_id}", json=body, headers={"If-Match": etag}).json())
 
 
-@personas_app.command("remove")
+@config_persona_app.command("remove")
 def persona_remove(
     ctx: typer.Context,
     persona_id: str,
@@ -546,7 +687,7 @@ def persona_remove(
     typer.echo(f"{persona_id}: removed")
 
 
-@personas_app.command("validate")
+@config_persona_app.command("validate")
 def persona_validate(ctx: typer.Context, persona_id: str) -> None:
     """Check that a persona is registered, enabled, and its bindings resolve."""
     data = _call(ctx, "POST", f"/api/v1/persona/{persona_id}/validate").json()
@@ -628,130 +769,185 @@ def chat(
             typer.echo(f"turn failed: {exc}", err=True)
 
 
+# -- `opal think backup` ---------------------------------------------------------------------------
+
+
+def _backup_etag(ctx: typer.Context) -> str:
+    """Shared portable-configuration revision for backup import/restore."""
+    return _call(ctx, "GET", "/api/v1/setting/").headers["ETag"]
+
+
+def _read_json_payload(json_str: str | None, file: str | None) -> dict[str, Any]:
+    """JSON request body from ``--json``, ``--file``, or stdin (in that priority order)."""
+    if json_str is not None:
+        text = json_str
+    elif file is not None:
+        text = Path(file).read_text(encoding="utf-8")
+    elif not sys.stdin.isatty():
+        text = sys.stdin.read()
+    else:
+        raise typer.BadParameter("provide --json, --file, or pipe JSON on stdin")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"invalid JSON: {exc}") from None
+
+
+@backup_app.command("list")
+def backup_list(ctx: typer.Context) -> None:
+    """List service-managed backup archives."""
+    data = _call(ctx, "GET", "/api/v1/backup/list").json()
+    if _state(ctx).json_output:
+        _emit(ctx, data)
+        return
+    for b in data:
+        typer.echo(f"{b['filename']}  {b['size_bytes']} bytes  {b['created_at']}")
+
+
+@backup_app.command("create")
+def backup_create(ctx: typer.Context) -> None:
+    """Write a timestamped archive of the current portable configuration."""
+    _emit(ctx, _call(ctx, "POST", "/api/v1/backup/create").json())
+
+
+@backup_app.command("download")
+def backup_download(
+    ctx: typer.Context,
+    filename: str,
+    out: str = typer.Option(None, "--out", "-o", help="Write the archive to this path instead of stdout"),
+) -> None:
+    """Download one service-managed backup archive."""
+    data = _call(ctx, "GET", f"/api/v1/backup/download/{filename}").content
+    if out:
+        Path(out).write_bytes(data)
+        typer.echo(f"{out} written ({len(data)} bytes)")
+    else:
+        sys.stdout.buffer.write(data)
+
+
+@backup_app.command("restore")
+def backup_restore(
+    ctx: typer.Context,
+    filename: str,
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Atomically restore a named archive (auto-fetches the config ETag)."""
+    etag = if_match or _backup_etag(ctx)
+    _emit(ctx, _call(ctx, "POST", f"/api/v1/backup/restore/{filename}", headers={"If-Match": etag}).json())
+
+
+@backup_app.command("remove")
+def backup_remove(ctx: typer.Context, filename: str) -> None:
+    """Delete a named backup archive."""
+    _call(ctx, "DELETE", f"/api/v1/backup/{filename}")
+    typer.echo(f"{filename}: removed")
+
+
+@backup_app.command("export")
+def backup_export(ctx: typer.Context) -> None:
+    """Export the portable configuration bundle (settings, personas, profiles)."""
+    _emit(ctx, _call(ctx, "GET", "/api/v1/backup/export").json())
+
+
+@backup_app.command("validate")
+def backup_validate(
+    ctx: typer.Context,
+    json_str: str = typer.Option(None, "--json", help="Bundle as a JSON string"),
+    file: str = typer.Option(None, "--file", "-f", help="Bundle from a JSON file"),
+) -> None:
+    """Validate a configuration bundle without applying it."""
+    data = _call(ctx, "POST", "/api/v1/backup/validate", json=_read_json_payload(json_str, file)).json()
+    _emit(ctx, data)
+    if not data.get("valid"):
+        raise typer.Exit(1)
+
+
+@backup_app.command("import")
+def backup_import(
+    ctx: typer.Context,
+    json_str: str = typer.Option(None, "--json", help="Bundle as a JSON string"),
+    file: str = typer.Option(None, "--file", "-f", help="Bundle from a JSON file"),
+    no_body: bool = typer.Option(False, "--no-body", help="Re-apply the persisted configuration (self round-trip)"),
+    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
+) -> None:
+    """Atomically import a portable configuration bundle (auto-fetches the config ETag)."""
+    etag = if_match or _backup_etag(ctx)
+    body = None if no_body else _read_json_payload(json_str, file)
+    kwargs: dict[str, Any] = {"headers": {"If-Match": etag}}
+    if body is not None:
+        kwargs["json"] = body
+    _emit(ctx, _call(ctx, "POST", "/api/v1/backup/import", **kwargs).json())
+
+
 # -- `opal think service` ------------------------------------------------------------------------
 
-PID_FILE = Path("logs") / "opal_think.pid"
 LOG_FILE = Path("logs") / "opal_think.log"
 
 
-def _pid_alive(pid: int) -> bool:
-    """Best-effort liveness probe for a recorded pid (tasklist on Windows, kill(0) elsewhere)."""
-    if sys.platform == "win32":
-        out = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True
-        ).stdout
-        return f',"{pid}",' in out.replace(" ", "")
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+def _service_manager(config: str | None = None):
+    """Local manager for the REST-unreachable fallback path."""
+    from opal_think.lifecycle import ServiceProcessManager
 
-
-def _stop_pid(pid: int, timeout: float = 10.0) -> bool:
-    """SIGTERM a recorded server pid; wait briefly for it to exit. False if it never ran."""
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return False
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not _pid_alive(pid):
-            return True
-        time.sleep(0.25)
-    return not _pid_alive(pid)
-
-
-def _port_owner_pid(port: int) -> int | None:
-    """PID of the process listening on the given TCP port (netstat on Windows, lsof elsewhere)."""
-    if sys.platform == "win32":
-        out = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True).stdout
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) >= 5 and parts[1].endswith(f":{port}") and parts[3] == "LISTENING":
-                return int(parts[4])
-        return None
-    out = subprocess.run(
-        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True
-    ).stdout.strip()
-    return int(out.splitlines()[0]) if out else None
+    return ServiceProcessManager(load_config(config))
 
 
 @service_app.command("start")
 def service_start(
+    ctx: typer.Context,
     config: str = typer.Option(None, "--config", help="YAML configuration file [env: OPAL_THINK_CONFIG]"),
+    append: bool = typer.Option(False, "--append", help="Append to the service log instead of truncating it"),
 ) -> None:
-    """Start opal-think-svc in the background and return immediately.
+    """Start the managed server in the background (restarts one already running).
 
-    Output overwrites logs/opal_think.log on each start; the child pid is recorded in
-    logs/opal_think.pid for `service stop`. Any existing service — pidfile-tracked or a
-    foreign process bound to the port — is stopped first, then replaced. Tail output
-    with `opal think service log`."""
-    config_path = config or os.environ.get("OPAL_THINK_CONFIG")
-    port = load_config(config_path).port
-    if PID_FILE.exists():
-        old_pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-        if _pid_alive(old_pid):
-            typer.echo(f"opal-think-svc already running (pid {old_pid}); stopping it first", err=True)
-            if not _stop_pid(old_pid):
-                typer.echo(f"could not stop running service (pid {old_pid})", err=True)
-                raise typer.Exit(1)
-        PID_FILE.unlink(missing_ok=True)  # stopped now, or stale file — start fresh
-    if (owner := _port_owner_pid(port)) is not None:
-        typer.echo(f"port {port} is held by pid {owner}; stopping it", err=True)
-        if not _stop_pid(owner):
-            typer.echo(f"could not free port {port} (pid {owner} still running)", err=True)
-            raise typer.Exit(1)
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    kwargs: dict = {"start_new_session": True}
-    if sys.platform == "win32":
-        kwargs = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
-    cmd = [sys.executable, "-m", "opal_think"]
-    if config_path:
-        cmd += ["--config", config_path]
-    with LOG_FILE.open("w", encoding="utf-8") as log:
-        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **kwargs)
-    # The child writes its own pidfile on startup (venv python.exe is a shim whose
-    # Popen pid differs from the real server process); wait briefly for it.
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            typer.echo(f"opal-think-svc failed to start (exit {proc.returncode}); see {LOG_FILE}", err=True)
-            raise typer.Exit(1)
-        if PID_FILE.exists():
-            pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-            typer.echo(f"opal-think-svc started in background (pid {pid}); logs: {LOG_FILE}")
-            return
-        time.sleep(0.25)
-    typer.echo("timed out waiting for service to write its pid file", err=True)
-    raise typer.Exit(1)
+    Calls POST /api/v1/service/start first so remote management works; when the API
+    is unreachable it falls back to the same pidfile/log bookkeeping locally, which
+    is what lets `service start` cold-start a stopped service."""
+    try:
+        _emit(ctx, _call(ctx, "POST", "/api/v1/service/start", json={"append": append}).json())
+        return
+    except ApiCallError as exc:
+        if exc.status_code != 0:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    proc = _service_manager(config).launch(append=append)
+    typer.echo(f"opal-think-svc started in background (pid {proc.pid}); logs: {LOG_FILE}")
 
 
 @service_app.command("stop")
-def service_stop() -> None:
-    """Stop the background opal-think-svc (SIGTERM by pid file)."""
-    if not PID_FILE.exists():
-        typer.echo("No pid file found; service is not running (or was not started via `service start`)", err=True)
-        raise typer.Exit(1)
-    pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-    if not _stop_pid(pid):
-        PID_FILE.unlink(missing_ok=True)
-        typer.echo(f"Stale pid file removed; no process {pid}", err=True)
-        raise typer.Exit(1) from None
-    PID_FILE.unlink(missing_ok=True)  # Windows SIGTERM is abrupt; the child can't self-clean
-    typer.echo(f"stopped opal-think-svc (pid {pid})")
+def service_stop(ctx: typer.Context) -> None:
+    """Stop the managed server if it is running (not an error when already stopped)."""
+    try:
+        _emit(ctx, _call(ctx, "POST", "/api/v1/service/stop").json())
+        return
+    except ApiCallError as exc:
+        if exc.status_code != 0:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    status, _ = _service_manager().stop()
+    if status["previous_pid"] is None:
+        typer.echo("no managed server running")
+    else:
+        typer.echo(f"server stopped (pid {status['previous_pid']})")
 
 
 @service_app.command("log")
-def service_log() -> None:
-    """Print the last 10 lines of the service log."""
-    if not LOG_FILE.exists():
+def service_log(ctx: typer.Context, lines: int = typer.Option(10, "--lines", "-n", min=1, max=1000)) -> None:
+    """Print the trailing lines of the service log."""
+    try:
+        _emit(ctx, _call(ctx, "GET", "/api/v1/service/log", params={"lines": lines}).json())
+        return
+    except ApiCallError as exc:
+        if exc.status_code == 404:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+        if exc.status_code != 0:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    tail = _service_manager().tail_log(lines)
+    if tail is None:
         typer.echo(f"No log file at {LOG_FILE}; start the service via `service start` first", err=True)
         raise typer.Exit(1)
-    typer.echo("".join(LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)[-10:]), nl=False)
+    typer.echo("".join(line + "\n" for line in tail["lines"]), nl=False)
 
 
 # -- `opal` root -------------------------------------------------------------------------------
