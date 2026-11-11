@@ -4,7 +4,7 @@
 openapi: 3.1.0
 info:
   title: OPAL Suite Kernel
-  version: 1.7.0
+  version: 1.7.1
   description: 'Shared contract kernel for the OPAL suite (SUITE STANDARD v1.2).
 
 
@@ -80,6 +80,21 @@ x-opal-persona:
       (origin: owner), and revalidate on use. No owner_url means standalone:
       local personas only.
     conflict: owner record wins when owner_url is configured; local records are retained.
+  profiles_vs_personas:
+    profile: >-
+      A profile is a preset of a service's operating defaults (e.g. Say
+      generation settings). Exactly one profile is active at a time; it fills
+      in any setting a request leaves out. New users pick a profile when they
+      want named, repeatable defaults ("studio quality", "fast draft").
+    persona: >-
+      A persona is an identity — who the user interacts with — that can carry
+      service-specific bindings (a Say voice, Think model/instructions). New
+      users pick a persona when they want a consistent character across
+      requests without repeating its bound settings.
+    difference: >-
+      Profiles change what a service does by default; personas change who the
+      service is for the user. They compose: the persona's bindings sit
+      between the active profile and explicit request fields in resolution.
   resolution:
     order: explicit request field > persona binding > profile > service default
     per_field: true

@@ -1,6 +1,6 @@
 """FastAPI application factory: middleware, exception handlers, router wiring.
 
-Every error response uses the nested ``OpalError`` envelope per ``openapi/opal_think_v1.6.0.yaml``;
+Every error response uses the nested ``OpalError`` envelope per ``openapi/opal_think_v1.7.1.yaml``;
 correlation headers are applied to all responses by :class:`OpalContextMiddleware`.
 """
 

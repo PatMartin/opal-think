@@ -1,4 +1,4 @@
-"""Pydantic models mirroring ``openapi/opal_think_v1.6.0.yaml`` component schemas.
+"""Pydantic models mirroring ``openapi/opal_think_v1.7.1.yaml`` component schemas.
 
 The OpenAPI contract is authoritative; these models implement it exactly:
 ``additionalProperties: false`` maps to ``extra="forbid"``, required fields are non-defaulted,
@@ -313,7 +313,7 @@ class BackupCreateResponse(BaseModel):
     message: str | None = None
 
 
-# -- personas (v1.6.0; shared OPAL persona identifiers introduced by OPAL Say) ----------------------------
+# -- personas (v1.7.1; shared OPAL persona identifiers introduced by OPAL Say) ----------------------------
 
 _PERSONA_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
 

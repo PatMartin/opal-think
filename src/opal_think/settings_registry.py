@@ -309,7 +309,7 @@ class SettingsStore:
         """Remove an override (restore default); returns the new global revision."""
         return self.reset_checked(key)
 
-    # -- personas (v1.6.0; share the global config revision) ---------------------------------------------
+    # -- personas (v1.7.1; share the global config revision) ---------------------------------------------
 
     @staticmethod
     def _persona_row(row: sqlite3.Row | tuple | None) -> dict[str, Any] | None:

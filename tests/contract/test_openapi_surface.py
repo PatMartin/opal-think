@@ -40,14 +40,10 @@ def _ops(spec: dict) -> set[tuple[str, str]]:
     }
 
 
-@pytest.mark.xfail(
-    reason="vendored contract is still 1.6.0 during the 1.7.1 migration; catches up in the vendoring step",
-    strict=False,
-)
 def test_all_contract_operations_present(client: TestClient) -> None:
     contract_ops = _ops(_contract())
     generated_ops = _ops(_generated(client))
-    assert len(contract_ops) == 27, f"contract inventory drifted: {len(contract_ops)} ops"
+    assert len(contract_ops) == 44, f"contract inventory drifted: {len(contract_ops)} ops"
     assert contract_ops == generated_ops, (
         f"missing: {sorted(contract_ops - generated_ops)}; undocumented extras: {sorted(generated_ops - contract_ops)}"
     )
@@ -98,4 +94,4 @@ def test_generated_openapi_parses_and_reports(client: TestClient) -> None:
     spec = _generated(client)
     assert spec["openapi"].startswith("3.1") or spec["openapi"].startswith("3.0")
     assert spec["info"]["title"] == "OPAL Think API"
-    assert spec["info"]["version"] == "1.6.0"
+    assert spec["info"]["version"] == "1.7.1"

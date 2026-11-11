@@ -1,4 +1,4 @@
-"""Persona endpoints (``/api/v1/persona`` family, v1.6.0).
+"""Persona endpoints (``/api/v1/persona`` family, v1.7.1).
 
 A persona is a named assistant identity for conversation sessions and tasks; an optional
 ``voice_id`` binds an OPAL Say voice identifier (resolved by Say, not verified locally).
