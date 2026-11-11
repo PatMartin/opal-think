@@ -12,6 +12,9 @@ from typing import Any
 
 import click
 import typer
+from rich.console import Console
+from rich.text import Text
+from rich.tree import Tree
 from typer.main import get_command
 
 from opal_think.cli.client import ApiCallError, ApiClient, api_url_from_env, token_from_env
@@ -978,8 +981,9 @@ except Exception:  # noqa: BLE001
 
 
 
-def _param_label(param: click.Parameter) -> str:
-    """One tree node: [--flag] for optional, --flag for required, <arg>/[<arg>] for arguments.
+def _param_label(param: click.Parameter) -> tuple[str, bool]:
+    """(label, optional): [--flag] for optional, --flag for required,
+    <arg>/[<arg>] for arguments.
 
     Typer vendors its own click classes, so options are detected by the presence
     of ``opts`` rather than isinstance."""
@@ -991,34 +995,71 @@ def _param_label(param: click.Parameter) -> str:
         text = f"<{param.name}>" if param.required else f"[<{param.name}>]"
     if param.help:
         text += f"  # {param.help}"
-    return text
+    return text, not param.required
 
 
-def _tree_lines(command: click.Command, prefix: str, lines: list[str]) -> None:
-    """Depth-first walk: parameters then subcommands, sorted, ASCII connectors."""
+def _tree_items(command: click.Command) -> list[tuple[str, object]]:
+    """Ordered tree items: parameters then subcommands, sorted; hidden commands skipped."""
     params = sorted(
         (p for p in getattr(command, "params", []) if "--help" not in (getattr(p, "opts", None) or [])),
         key=lambda p: p.name,
     )
-    subs = sorted((getattr(command, "commands", None) or {}).items())
-    items: list[tuple[str, object]] = [("param", p) for p in params] + [("cmd", s) for s in subs]
+    subs = sorted(
+        (name, sub)
+        for name, sub in (getattr(command, "commands", None) or {}).items()
+        if not getattr(sub, "hidden", False)
+    )
+    return [("param", p) for p in params] + [("cmd", s) for s in subs]
+
+
+def _tree_lines(command: click.Command, prefix: str, lines: list[str]) -> None:
+    """Depth-first walk: parameters then subcommands, sorted, pure-ASCII connectors."""
+    items = _tree_items(command)
     for index, (kind, item) in enumerate(items):
         last = index == len(items) - 1
-        connector = "-- " if last else "|-- "
+        connector = "`-- " if last else "|-- "
         if kind == "param":
-            lines.append(prefix + connector + _param_label(item))
+            lines.append(prefix + connector + _param_label(item)[0])
         else:
             name, sub = item
             lines.append(prefix + connector + name)
             _tree_lines(sub, prefix + ("    " if last else "|   "), lines)
 
 
+def _rich_tree(command: click.Command, root_label: str) -> Tree:
+    """Build a ``rich.tree.Tree``: bold green root, blue guides, bold-cyan command
+    groups, cyan leaf commands, yellow required params, dim optional params."""
+    tree = Tree(Text(root_label, style="bold green"), guide_style="blue")
+
+    def populate(parent: Tree, cmd: click.Command) -> None:
+        for kind, item in _tree_items(cmd):
+            if kind == "param":
+                label, optional = _param_label(item)
+                parent.add(Text(label, style="dim" if optional else "yellow"), guide_style="blue")
+            else:
+                name, sub = item
+                is_group = bool(getattr(sub, "commands", None))
+                child = parent.add(Text(name, style="bold cyan" if is_group else "cyan"), guide_style="blue")
+                populate(child, sub)
+
+    populate(tree, command)
+    return tree
+
+
 @think_app.command("tree", help="Print the full CLI command/argument tree.")
-def tree_cmd() -> None:
-    """Render the rooted ASCII tree of every command and argument (skips --help)."""
-    lines = ["opal-think"]
-    _tree_lines(get_command(think_app), "", lines)
-    typer.echo("\n".join(lines))
+def tree_cmd(
+    ascii_guides: bool = typer.Option(
+        False, "--ascii", help="Pure-ASCII guides (|, |--, `--), color-free — safe for logs"
+    ),
+) -> None:
+    """Render the command/argument tree — rich colors on a terminal, plain
+    Unicode box-drawing when piped; ``--ascii`` for a pure-ASCII variant."""
+    if ascii_guides:
+        lines = ["opal-think"]
+        _tree_lines(get_command(think_app), "", lines)
+        typer.echo("\n".join(lines))
+        return
+    Console().print(_rich_tree(get_command(think_app), "opal-think"))
 
 
 if __name__ == "__main__":
