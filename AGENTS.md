@@ -1,6 +1,6 @@
 # OPAL-THINK project notes
 
-- Contract is authoritative: `openapi/opal_think_v1.6.0.yaml` (+ `openapi/shared/opal_kernel.yaml`;
+- Contract is authoritative: `openapi/opal_think_v*.yaml` (+ `openapi/shared/opal_kernel.yaml`;
   vendored byte-identical at `src/opal_think/contract/opal_think.yaml` and `contract/shared/opal_kernel.yaml`).
   Do not silently change public API behavior.
 - Stack: FastAPI + Pydantic v2 + Typer + HTTPX, asyncio, SQLite, src layout. Mirrors `../opal-event` conventions.

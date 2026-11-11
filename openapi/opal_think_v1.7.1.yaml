@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: OPAL Think API
-  version: 1.6.0
+  version: 1.7.1
   description: |
     OPAL-THINK is a model-neutral, guarded reasoning service. The OpenAPI contract is authoritative; CLI and SPA only call REST.
 
@@ -25,7 +25,7 @@ info:
     - X-Opal-Session-Id identifies a logical trace, not a server-created Session; TaskCreate.session_id identifies an actual Session resource. If both are present, propagate the resource session ID as the canonical context header. Do not treat these identifiers as authorization.
     - X-Opal-Transaction-Id is logical workflow tracing, not a distributed atomic transaction; X-Opal-Request-Id is per HTTP hop, and X-Opal-Causation-Id identifies immediate causal parent when known. Generate transaction/request IDs when absent and return known IDs on success/error and initial stream headers. Outbound REST requests regenerate request ID, preserve transaction/context and set causation.
     - IDs are printable, non-whitespace ASCII tokens of 1..128 chars. Invalid client-provided context IDs return 422.
-    - Growing task and session histories use cursor pagination (filter-scoped, deterministic, expiring); model catalogs are bounded and not paginated.
+    - Growing task and session histories return bounded arrays (deterministic ordering; `limit` caps items); model catalogs are bounded and not paginated.
     - Single-setting GET/PUT/DELETE and collection GET/PATCH use strong portable-configuration ETags, mandatory If-Match on mutation, 428 if missing, 412 if stale.
     - Credentials are configured as references; never return raw secret material. On non-loopback bindings require REST authentication.
     - TASK stream is live SSE, no guaranteed replay. Final Task snapshot remains source of truth.
@@ -54,6 +54,8 @@ tags:
   description: Manage named persona identities adopting the shared OPAL persona identifiers introduced by OPAL Say v1.6.0.
 - name: info
   description: Service identity, version and liveness probes.
+- name: service
+  description: Service process lifecycle (start, stop, log tail).
 security:
 - BearerAuth: []
 paths:
@@ -73,7 +75,7 @@ paths:
         serializes active tasks (409 if busy). Idempotency-Key can safely repeat admission but does not guarantee
         exactly-once action side effects. All context is untrusted. No separate chat REST endpoint.
       parameters:
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: './shared/opal_kernel.yaml#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -114,13 +116,18 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/TooManyRequests'
         '503':
           $ref: './shared/opal_kernel.yaml#/components/responses/ServiceUnavailable'
-      x-opal-cli: task create / ask / chat
+      x-opal-cli:
+        group: task
+        command: create
+        aliases:
+        - ask
+        - chat
     get:
       tags:
       - tasks
       operationId: list_tasks
       summary: List retained tasks
-      description: Newest-first deterministic pagination by (created_at,id). Cursors bind to filters and expire.
+      description: Newest-first deterministic ordering by (created_at,id); `limit` caps the items returned.
         Includes standalone and session-linked tasks. Retention settings remove old task records automatically;
         no task DELETE operation.
       parameters:
@@ -129,7 +136,7 @@ paths:
       - $ref: './shared/opal_kernel.yaml#/components/parameters/Limit'
       responses:
         '200':
-          description: Task page.
+          description: Task list.
           content:
             application/json:
               schema:
@@ -151,7 +158,9 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli: task list
+      x-opal-cli:
+        group: task
+        command: list
   /api/v1/task/{task_id}:
     parameters:
     - $ref: '#/components/parameters/TaskId'
@@ -191,7 +200,9 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli: task show
+      x-opal-cli:
+        group: task
+        command: show
   /api/v1/task/{task_id}/stream:
     parameters:
     - $ref: '#/components/parameters/TaskId'
@@ -244,7 +255,9 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli: task watch
+      x-opal-cli:
+        group: task
+        command: watch
   /api/v1/task/{task_id}/cancel:
     parameters:
     - $ref: '#/components/parameters/TaskId'
@@ -287,7 +300,9 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/Conflict'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli: task cancel
+      x-opal-cli:
+        group: task
+        command: cancel
   /api/v1/session/:
     parameters:
     - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
@@ -335,19 +350,21 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
         '429':
           $ref: './shared/opal_kernel.yaml#/components/responses/TooManyRequests'
-      x-opal-cli: session add
+      x-opal-cli:
+        group: session
+        command: add
     get:
       tags:
       - sessions
       operationId: list_sessions
       summary: List sessions
-      description: Newest updated first, deterministically ordered by (updated_at,id); opaque cursors expire. For
-        turns in a conversation, list tasks filtered by session_id.
+      description: Newest updated first, deterministically ordered by (updated_at,id); `limit` caps the items
+        returned. For turns in a conversation, list tasks filtered by session_id.
       parameters:
       - $ref: './shared/opal_kernel.yaml#/components/parameters/Limit'
       responses:
         '200':
-          description: Session page.
+          description: Session list.
           content:
             application/json:
               schema:
@@ -367,7 +384,9 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli: session list
+      x-opal-cli:
+        group: session
+        command: list
   /api/v1/session/{session_id}:
     parameters:
     - $ref: '#/components/parameters/SessionId'
@@ -405,7 +424,9 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli: session show
+      x-opal-cli:
+        group: session
+        command: show
     delete:
       tags:
       - sessions
@@ -436,7 +457,9 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/Conflict'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli: session remove
+      x-opal-cli:
+        group: session
+        command: remove
   /api/v1/model/:
     parameters:
     - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
@@ -477,7 +500,9 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
         '503':
           $ref: './shared/opal_kernel.yaml#/components/responses/ServiceUnavailable'
-      x-opal-cli: model list
+      x-opal-cli:
+        group: model
+        command: list
   /api/v1/model/{model_id}:
     parameters:
     - $ref: '#/components/parameters/ModelId'
@@ -516,29 +541,166 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli: model show
+      x-opal-cli:
+        group: model
+        command: show
+  /api/v1/profile/:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/profiles_collection'
+    x-opal-cli:
+      get:
+        parent: config
+        group: profile
+        command: list
+      post:
+        parent: config
+        group: profile
+        command: add
+  /api/v1/profile/{profile_id}:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/profile_item'
+    x-opal-cli:
+      get:
+        parent: config
+        group: profile
+        command: show
+      patch:
+        parent: config
+        group: profile
+        command: update
+      delete:
+        parent: config
+        group: profile
+        command: remove
+  /api/v1/profile/{profile_id}/activate:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/profile_activate'
+    x-opal-cli:
+      post:
+        parent: config
+        group: profile
+        command: activate
   /api/v1/setting/:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/settings_collection'
     x-opal-cli:
-      get: 'settings list'
+      get:
+        parent: config
+        group: setting
+        command: list
+      patch:
+        parent: config
+        group: setting
+        command: update
+        aliases:
+        - setting patch
   /api/v1/setting/{key}:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/settings_key'
     x-opal-cli:
-      get: 'settings show'
-      put: 'settings set'
-      delete: 'settings remove'
+      get:
+        parent: config
+        group: setting
+        command: show
+      put:
+        parent: config
+        group: setting
+        command: set
+      delete:
+        parent: config
+        group: setting
+        command: remove
   /api/v1/health/:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/health'
     x-opal-cli:
-      get: 'health'
+      get:
+        group: info
+        command: health
   /api/v1/info/:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/info'
+    x-opal-cli:
+      get:
+        group: info
+        command: version
   /api/v1/info/ping:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/info_ping'
+    x-opal-cli:
+      get:
+        group: info
+        command: ping
   /api/v1/health/live:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/health_live'
+    x-opal-cli:
+      get:
+        group: info
+        command: live
   /api/v1/health/ready:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/health_ready'
+    x-opal-cli:
+      get:
+        group: info
+        command: ready
+  /api/v1/backup/list:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_list'
+    x-opal-cli:
+      get:
+        group: backup
+        command: list
+  /api/v1/backup/create:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_create'
+    x-opal-cli:
+      post:
+        group: backup
+        command: create
+  /api/v1/backup/download/{filename}:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_download'
+    x-opal-cli:
+      get:
+        group: backup
+        command: download
+  /api/v1/backup/restore/{filename}:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_restore'
+    x-opal-cli:
+      post:
+        group: backup
+        command: restore
+  /api/v1/backup/{filename}:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_delete'
+    x-opal-cli:
+      delete:
+        group: backup
+        command: remove
+  /api/v1/backup/export:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_export'
+    x-opal-cli:
+      get:
+        group: backup
+        command: export
+  /api/v1/backup/import:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_import'
+    x-opal-cli:
+      post:
+        group: backup
+        command: import
+  /api/v1/backup/validate:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_validate_post'
+    x-opal-cli:
+      post:
+        group: backup
+        command: validate
+  /api/v1/service/start:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/service_start'
+    x-opal-cli:
+      post:
+        group: service
+        command: start
+  /api/v1/service/stop:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/service_stop'
+    x-opal-cli:
+      post:
+        group: service
+        command: stop
+  /api/v1/service/log:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/service_log'
+    x-opal-cli:
+      get:
+        group: service
+        command: log
   /api/v1/persona/:
     get:
       tags:
@@ -582,6 +744,10 @@ paths:
 
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli:
+        parent: config
+        group: persona
+        command: list
     post:
       tags:
       - persona
@@ -642,6 +808,10 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/PreconditionRequired'
       parameters:
       - $ref: './shared/opal_kernel.yaml#/components/parameters/IfMatch'
+      x-opal-cli:
+        parent: config
+        group: persona
+        command: add
     parameters:
     - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
     - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
@@ -679,6 +849,10 @@ paths:
 
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli:
+        parent: config
+        group: persona
+        command: validate
     parameters:
     - $ref: '#/components/parameters/PersonaId'
     - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
@@ -727,6 +901,10 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
+      x-opal-cli:
+        parent: config
+        group: persona
+        command: show
     patch:
       tags:
       - persona
@@ -770,6 +948,10 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/PreconditionRequired'
       parameters:
       - $ref: './shared/opal_kernel.yaml#/components/parameters/IfMatch'
+      x-opal-cli:
+        parent: config
+        group: persona
+        command: update
     delete:
       tags:
       - persona
@@ -803,6 +985,10 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/PreconditionRequired'
       parameters:
       - $ref: './shared/opal_kernel.yaml#/components/parameters/IfMatch'
+      x-opal-cli:
+        parent: config
+        group: persona
+        command: remove
 components:
   securitySchemes:
     BearerAuth: {$ref: './shared/opal_kernel.yaml#/components/securitySchemes/BearerAuth'}
@@ -834,16 +1020,6 @@ components:
         minLength: 1
         maxLength: 200
       description: URL-encode opaque ID.
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: false
-      schema:
-        type: string
-        minLength: 1
-        maxLength: 128
-      description: Optional caller-scoped deduplication for task creation. Same key+body returns the same task;
-        conflicting body returns 409.
     TaskStatus:
       name: status
       in: query
@@ -1067,7 +1243,7 @@ components:
       type: array
       items:
         $ref: '#/components/schemas/Task'
-      description: Bounded list; `limit` caps the returned items.
+      description: Bounded list of tasks, newest first; `limit` caps the returned items.
     SessionCreate:
       type: object
       additionalProperties: false
@@ -1107,7 +1283,7 @@ components:
       type: array
       items:
         $ref: '#/components/schemas/Session'
-      description: Bounded list; `limit` caps the returned items.
+      description: Bounded list of sessions, newest updated first; `limit` caps the returned items.
     Model:
       type: object
       additionalProperties: false
@@ -1169,8 +1345,9 @@ components:
     PersonaRead:
       $ref: './shared/opal_kernel.yaml#/components/schemas/OpalPersonaRead'
 x-opal-cli-commands:
-  ask: POST /api/v1/tasks/ + watch/show
-  chat: session add (optional initial) + POST /api/v1/tasks/ per turn
+  ask: alias of `task create` (POST /api/v1/task/ + watch/show)
+  chat: alias of `task create` bound to a session (session add, optional initial, + POST /api/v1/task/
+    per turn)
   task:
   - create
   - list
@@ -1185,13 +1362,46 @@ x-opal-cli-commands:
   model:
   - list
   - show
-  settings:
-  - list
-  - show
-  - set
-  - remove
-  health:
+  config:
+    profile:
+    - list
+    - add
+    - show
+    - update
+    - remove
+    - activate
+    setting:
+    - list
+    - patch
+    - show
+    - set
+    - remove
+    persona:
+    - list
+    - add
+    - show
+    - update
+    - remove
+    - validate
+  info:
+  - version
+  - ping
   - health
+  - live
+  - ready
+  backup:
+  - list
+  - create
+  - download
+  - restore
+  - remove
+  - export
+  - import
+  - validate
+  service:
+  - start
+  - stop
+  - log
 x-opal-event-integration:
   source_contract: https://github.com/PatMartin/opal-api/blob/main/openapi/opal_event.yaml
   actions_discovery: GET /api/v1/action/
