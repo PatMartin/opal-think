@@ -289,3 +289,53 @@ class PersonaRead(BaseModel):
     origin: Literal["local", "owner"] = "local"
     created_at: datetime
     updated_at: datetime
+
+
+# -- profiles (v1.7.1; kernel ``OpalProfile`` family) ----------------------------------------------------
+#
+# A profile is a named preset of operating defaults owned by this service (the suite's
+# authoritative profile registry, mirroring persona ownership). ``id``/``name``/
+# ``is_active`` are suite-standard; ``settings`` is this service's compartment — a
+# portable-settings preset applied on activation. Models allow extra properties so
+# other OPAL services can attach their own compartments; think stores them opaquely.
+
+
+class ProfileCreate(BaseModel):
+    """Kernel ``OpalProfileCreate``: ``name`` required; ``is_active: true`` makes this
+    the only active profile and applies its ``settings`` preset in the same write."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int | None = Field(default=None, ge=1)
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=1000)
+    is_active: bool = False
+    settings: dict[str, Any] | None = None
+
+
+class ProfilePatch(BaseModel):
+    """Kernel ``OpalProfilePatch``: partial top-level merge — each supplied key
+    (including foreign service compartments) replaces that value wholesale.
+    ``is_active: true`` activates this profile (deactivating all others)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: NonNull[str] = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=1000)
+    is_active: bool | None = None
+    settings: dict[str, Any] | None = None
+
+
+class Profile(BaseModel):
+    """Kernel ``OpalProfile`` wire shape: suite-standard fields plus every stored
+    service-defined compartment (``settings`` and foreign keys are preserved)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int = Field(ge=1)
+    name: str
+    description: str | None = None
+    is_active: bool
+    settings: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
