@@ -596,6 +596,62 @@ class SettingsStore:
 
         return self._checked_write(write, expect_global=expect_global)
 
+    # -- wholesale portable-config replace (backup import/restore, v1.7.1) --------------------------------
+
+    def replace_portable_config_checked(
+        self,
+        *,
+        settings: dict[str, Any],
+        personas: list[dict[str, Any]],
+        profiles: list[dict[str, Any]],
+        expect_global: int | None = None,
+    ) -> int:
+        """Atomically replace the entire portable configuration — settings overrides,
+        personas, and profiles — in one transaction; bumps the global revision once.
+        The caller has already validated the bundle; absent collections mean empty.
+        ``RevisionConflict`` on stale ETag."""
+
+        def write(conn: sqlite3.Connection) -> int:
+            revision = self._bump(conn)
+            now = _now()
+            conn.execute("DELETE FROM settings")
+            for key, value in settings.items():
+                conn.execute(
+                    "INSERT INTO settings (key, value, revision, updated_at) VALUES (?,?,?,?)",
+                    (key, json.dumps(value), revision, now),
+                )
+            conn.execute("DELETE FROM personas")
+            for p in personas:
+                conn.execute(
+                    "INSERT INTO personas (persona_id, name, description, voice_id, enabled, origin,"
+                    " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        p["persona_id"],
+                        p["name"],
+                        p.get("description"),
+                        p.get("voice_id"),
+                        int(bool(p.get("enabled", True))),
+                        p.get("origin", "local"),
+                        p.get("created_at") or now,
+                        p.get("updated_at") or now,
+                    ),
+                )
+            conn.execute("DELETE FROM profiles")
+            for p in profiles:
+                record = {
+                    "description": p.get("description"),
+                    "created_at": p.get("created_at") or now,
+                    "updated_at": p.get("updated_at") or now,
+                    **{k: v for k, v in p.items() if k not in ("id", "name", "is_active")},
+                }
+                conn.execute(
+                    "INSERT INTO profiles (id, name, is_active, record) VALUES (?,?,?,?)",
+                    (p["id"], p["name"], int(bool(p.get("is_active"))), json.dumps(record)),
+                )
+            return revision
+
+        return self._checked_write(write, expect_global=expect_global)
+
 
 class SettingsRegistry:
     """Read model over the store: merges defaults with persisted overrides."""

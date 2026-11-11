@@ -263,6 +263,56 @@ class ServiceLogTail(BaseModel):
     lines: list[str] = Field(default_factory=list)
 
 
+# -- backup / portable configuration (kernel ``backup_*`` path items) ------------------------------------
+
+
+class ConfigExport(BaseModel):
+    """Kernel ``OpalConfigExport`` request shape. ``settings`` is the flat
+    key→value portable settings map; ``personas``/``profiles`` are this service's
+    portable collections; foreign sections are accepted (warned, ignored on import)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    format_version: str | int
+    exported_at: str | None = None
+    settings: dict[str, Any]
+    personas: list[dict[str, Any]] = Field(default_factory=list)
+    profiles: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ImportResult(BaseModel):
+    """Kernel ``OpalImportResult``: outcome fields are service-defined."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    success: bool = True
+    status: Literal["imported"] = "imported"
+    revision: str | None = None  # resulting configuration ETag for subsequent If-Match writes
+    counts: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    pending_restart: bool = False
+    message: str | None = None
+
+
+class BackupInfo(BaseModel):
+    """Kernel ``OpalBackupInfo``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str
+    size_bytes: int = Field(ge=0)
+    created_at: datetime
+
+
+class BackupCreateResponse(BaseModel):
+    """Kernel ``OpalBackupCreateResponse``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str
+    message: str | None = None
+
+
 # -- personas (v1.6.0; shared OPAL persona identifiers introduced by OPAL Say) ----------------------------
 
 _PERSONA_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
