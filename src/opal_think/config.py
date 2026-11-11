@@ -40,6 +40,7 @@ class ThinkConfig:
     port: int = 8080
     db_path: Path = Path("var/think.db")
     auth: AuthConfig = field(default_factory=AuthConfig)
+    config_path: str | None = None  # file the config was loaded from, for managed restarts
 
     def validate(self) -> None:
         """Suite policy: REST bearer auth is mandatory on non-loopback binds."""
@@ -54,6 +55,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> ThinkConfig:
     config = ThinkConfig()
     config_path = path or os.environ.get("OPAL_THINK_CONFIG")
     if config_path:
+        config.config_path = str(config_path)
         data: dict[str, Any] = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
         server = data.get("server", {})
         config.host = server.get("host", config.host)

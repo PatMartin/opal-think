@@ -232,6 +232,37 @@ class OpalValidationReport(BaseModel):
     details: dict[str, Any] | None = None
 
 
+# -- service lifecycle (kernel ``service_*`` path items) -------------------------------------------------
+
+
+class ServiceStartOptions(BaseModel):
+    """Kernel ``OpalServiceStartOptions``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    append: bool = False
+
+
+class ServiceStatus(BaseModel):
+    """Kernel ``OpalServiceStatus``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["running", "stopped"]
+    pid: int | None = None
+    previous_pid: int | None = None
+    log_file: str | None = None
+
+
+class ServiceLogTail(BaseModel):
+    """Kernel ``OpalServiceLogTail``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    log_file: str | None = None
+    lines: list[str] = Field(default_factory=list)
+
+
 # -- personas (v1.6.0; shared OPAL persona identifiers introduced by OPAL Say) ----------------------------
 
 _PERSONA_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
