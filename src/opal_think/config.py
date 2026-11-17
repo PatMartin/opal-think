@@ -65,8 +65,30 @@ def load_config(path: str | os.PathLike[str] | None = None) -> ThinkConfig:
         auth = data.get("auth", {})
         config.auth.enabled = bool(auth.get("enabled", config.auth.enabled))
         config.auth.token_env = auth.get("token_env", config.auth.token_env)
-    if env_host := os.environ.get("OPAL_THINK_HOST"):
-        config.host = env_host
-    if env_port := os.environ.get("OPAL_THINK_PORT"):
-        config.port = int(env_port)
+    if "OPAL_THINK_HOST" in os.environ:
+        config.host = os.environ["OPAL_THINK_HOST"]
+    if "OPAL_THINK_PORT" in os.environ:
+        config.port = int(os.environ["OPAL_THINK_PORT"])
+    if "OPAL_THINK_DB_PATH" in os.environ:
+        config.db_path = Path(os.environ["OPAL_THINK_DB_PATH"])
     return config
+
+
+def dotenv_baseline(path: str | os.PathLike[str] | None = None) -> dict[str, object]:
+    config = ThinkConfig()
+    config_path = Path(path) if path else None
+    if config_path:
+        data: dict[str, Any] = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        server = data.get("server", {})
+        config.host = server.get("host", config.host)
+        config.port = int(server.get("port", config.port))
+        config.db_path = Path(data.get("db_path", config.db_path))
+    values = {
+        "OPAL_THINK_HOST": config.host,
+        "OPAL_THINK_PORT": config.port,
+        "OPAL_THINK_DB_PATH": config.db_path,
+        "OPAL_THINK_API_TOKEN": "<set-a-token>",
+    }
+    if config_path:
+        values["OPAL_THINK_CONFIG"] = str(config_path)
+    return values

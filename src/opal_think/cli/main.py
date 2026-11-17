@@ -76,7 +76,16 @@ def think_callback(
     opal_causation_id: str = typer.Option(
         None, "--opal-causation-id", help="X-Opal-Causation-Id to send with every request [env: OPAL_CAUSATION_ID]"
     ),
+    env_file: str = typer.Option(None, "--env-file", help="Load this dotenv file instead of ./.env"),
+    no_env_file: bool = typer.Option(False, "--no-env-file", help="Disable dotenv loading and .env initialization"),
 ) -> None:
+    from opal_think.config import dotenv_baseline
+    from opal_think.dotenv import DotenvError, prepare
+
+    try:
+        prepare(env_file=env_file, no_env_file=no_env_file, baseline=dotenv_baseline())
+    except DotenvError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     context_headers = {
         "X-Opal-Session-Id": opal_session_id or os.environ.get("OPAL_SESSION_ID"),
         "X-Opal-Transaction-Id": opal_transaction_id or os.environ.get("OPAL_TRANSACTION_ID"),

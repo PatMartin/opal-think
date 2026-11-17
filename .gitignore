@@ -11,3 +11,5 @@ var/
 nul
 spec/
 logs/
+.env
+!.env.example

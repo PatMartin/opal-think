@@ -9,6 +9,7 @@ description = "OPAL Think: model-neutral, guarded reasoning service (opal-think-
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "python-dotenv>=1.0",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "pydantic>=2.6",

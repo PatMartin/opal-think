@@ -156,3 +156,7 @@ OPAL_THINK_LIVE_EVENT=http://host:8080 OPAL_THINK_LIVE_OLLAMA=http://host:11434 
 # knobs: OPAL_THINK_LIVE_EVENT_ACTION, OPAL_THINK_LIVE_EVENT_KEY (env var name),
 #        OPAL_THINK_LIVE_TIMEOUT; evidence -> OPAL_THINK_LIVE_REPORT or $TMP
 ```
+
+## Dotenv configuration
+
+See [docs/DOTENV.md](docs/DOTENV.md) for `.env` loading, initialization, precedence, and `--env-file` / `--no-env-file` behavior.

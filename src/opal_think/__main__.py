@@ -9,7 +9,8 @@ from pathlib import Path
 import typer
 import uvicorn
 
-from opal_think.config import load_config
+from opal_think.config import dotenv_baseline, load_config
+from opal_think.dotenv import DotenvError, prepare
 
 svc_app = typer.Typer(help="Run the OPAL-THINK REST service.", pretty_exceptions_enable=False)
 
@@ -19,7 +20,14 @@ def run(
     config: str = typer.Option(None, "--config", help="YAML config file [env: OPAL_THINK_CONFIG]"),
     host: str = typer.Option(None, "--host", help="Bind host [env: OPAL_THINK_HOST]"),
     port: int = typer.Option(None, "--port", help="Bind port [env: OPAL_THINK_PORT]"),
+    env_file: str = typer.Option(None, "--env-file", help="Load this dotenv file instead of ./.env"),
+    no_env_file: bool = typer.Option(False, "--no-env-file", help="Disable dotenv loading and .env initialization"),
 ) -> None:
+    try:
+        prepare(env_file=env_file, no_env_file=no_env_file, baseline=dotenv_baseline(config))
+    except DotenvError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
     cfg = load_config(config)
     if host:
         cfg.host = host
