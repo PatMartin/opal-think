@@ -60,10 +60,10 @@ def test_failed_task_still_logs_telemetry(task_client, caplog) -> None:
 
 def test_finish_emits_telemetry_to_live_subscribers(task_client) -> None:
     engine = task_client.app.state.engine
-    queue = engine.subscribe("task_probe")
+    sub = engine.subscribe("task_probe")
     sample = {"llm_calls": 2, "tool_calls": 1, "duration_ms": 5}
     engine._finish("task_probe", "completed", telemetry=sample)
-    frame = queue.get_nowait()
+    frame = sub.queue.get_nowait()
     assert frame["type"] == "task.completed" and frame["data"]["telemetry"] == sample
 
 

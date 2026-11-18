@@ -55,6 +55,44 @@ _TERMINAL_EVENTS = {
     "cancelled": "task.cancelled",
     "timed_out": "task.timed_out",
 }
+_TERMINAL_TYPES = frozenset(_TERMINAL_EVENTS.values())
+_SUBSCRIBER_QUEUE_MAX = 512
+
+
+class _Subscriber:
+    """Bounded per-watcher SSE mailbox.
+
+    Live frames drop silently when the mailbox is saturated — the contract
+    promises no replay for intermediate events. Terminal frames and the close
+    sentinel are *reserved*: a saturated mailbox evicts its oldest live frame
+    so a watcher can never be stranded without the terminal event or the
+    stream's end. ``dropped`` counts frames lost to backpressure.
+    """
+
+    __slots__ = ("dropped", "queue")
+
+    def __init__(self, maxsize: int = _SUBSCRIBER_QUEUE_MAX) -> None:
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        self.dropped = 0
+
+    def offer(self, frame: dict[str, Any] | None, *, terminal: bool) -> None:
+        if terminal:
+            self._reserve(frame)
+            return
+        try:
+            self.queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            self.dropped += 1
+
+    def _reserve(self, frame: dict[str, Any] | None) -> None:
+        while True:
+            try:
+                self.queue.put_nowait(frame)
+                return
+            except asyncio.QueueFull:
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    self.queue.get_nowait()
+                    self.dropped += 1
 
 
 def _now() -> str:
@@ -76,7 +114,7 @@ class TaskEngine:
         self._providers = providers
         self._cancels: dict[str, asyncio.Event] = {}
         self._runners: dict[str, asyncio.Task] = {}
-        self._subscribers: dict[str, set[asyncio.Queue]] = {}
+        self._subscribers: dict[str, set[_Subscriber]] = {}
         # wired by the app factory: returns an EVENT client or None (model-only mode)
         self.event_client_factory = lambda: None
 
@@ -85,29 +123,28 @@ class TaskEngine:
 
     # -- live event fan-out (SSE; no replay guarantee) -------------------------------------------
 
-    def subscribe(self, task_id: str) -> asyncio.Queue:
-        queue: asyncio.Queue = asyncio.Queue(maxsize=512)
-        self._subscribers.setdefault(task_id, set()).add(queue)
-        return queue
+    def subscribe(self, task_id: str) -> _Subscriber:
+        sub = _Subscriber()
+        self._subscribers.setdefault(task_id, set()).add(sub)
+        return sub
 
-    def unsubscribe(self, task_id: str, queue: asyncio.Queue) -> None:
+    def unsubscribe(self, task_id: str, sub: _Subscriber) -> None:
         subs = self._subscribers.get(task_id)
         if subs is not None:
-            subs.discard(queue)
+            subs.discard(sub)
             if not subs:
                 del self._subscribers[task_id]
 
     def _emit(self, task_id: str, event_type: str, data: dict[str, Any]) -> dict[str, Any]:
         frame = {"task_id": task_id, "timestamp": _now(), "type": event_type, "data": data}
-        for queue in list(self._subscribers.get(task_id, ())):
-            with contextlib.suppress(asyncio.QueueFull):
-                queue.put_nowait(frame)  # slow consumers drop frames; no replay guarantee
+        terminal = event_type in _TERMINAL_TYPES
+        for sub in list(self._subscribers.get(task_id, ())):
+            sub.offer(frame, terminal=terminal)
         return frame
 
     def _close_subscribers(self, task_id: str) -> None:
-        for queue in self._subscribers.pop(task_id, ()):
-            with contextlib.suppress(asyncio.QueueFull):
-                queue.put_nowait(None)
+        for sub in self._subscribers.pop(task_id, ()):
+            sub.offer(None, terminal=True)
 
     # -- admission ---------------------------------------------------------------------------
 
@@ -332,8 +369,11 @@ class TaskEngine:
             "validation_rejections": 0,
             "usage": {},
         }
+        finished = False
 
         def finish(status: str, **kwargs) -> None:
+            nonlocal finished
+            finished = True
             telemetry["duration_ms"] = int((asyncio.get_event_loop().time() - started) * 1000)
             self._finish(task_id, status, telemetry=telemetry, **kwargs)
 
@@ -356,6 +396,12 @@ class TaskEngine:
         else:
             finish("completed", answer=answer)
         finally:
+            if not finished:
+                # Runner died without a terminal transition (abnormal — e.g. its
+                # asyncio task was cancelled). No terminal state is fabricated;
+                # watchers get the stream's end and reconcile from the durable
+                # record (which the orphan reaper later marks failed).
+                self._close_subscribers(task_id)
             self._cancels.pop(task_id, None)
             self._runners.pop(task_id, None)
 

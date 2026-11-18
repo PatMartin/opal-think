@@ -26,6 +26,8 @@ router = APIRouter(prefix="/api/v1/task", tags=["tasks"])
 
 TaskId = Path(min_length=1, max_length=128)
 
+_KEEPALIVE_SECONDS = 15.0
+
 _TERMINAL_EVENTS = {
     "completed": "task.completed",
     "failed": "task.failed",
@@ -156,7 +158,7 @@ async def watch_task(
 
         return StreamingResponse(terminal_gen(), media_type="text/event-stream")
 
-    queue = engine.subscribe(task_id)
+    sub = engine.subscribe(task_id)
 
     async def gen():
         try:
@@ -174,9 +176,17 @@ async def watch_task(
             )
             while True:
                 try:
-                    frame = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    frame = await asyncio.wait_for(sub.queue.get(), timeout=_KEEPALIVE_SECONDS)
                 except TimeoutError:
                     if await request.is_disconnected():
+                        break
+                    # Idle-watcher reconciliation: if the row reached a terminal
+                    # state whose frame never surfaced on this mailbox, synthesize
+                    # the terminal snapshot from the durable record rather than
+                    # keep-alive forever.
+                    row = store.get_task(task_id)
+                    if row["status"] in TERMINAL_TASK_STATUSES:
+                        yield _sse_frame(_snapshot_frame(row))
                         break
                     yield ": keep-alive\n\n"
                     continue
@@ -186,7 +196,7 @@ async def watch_task(
                 if frame["type"] in _TERMINAL_EVENTS.values():
                     break
         finally:
-            engine.unsubscribe(task_id, queue)
+            engine.unsubscribe(task_id, sub)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
