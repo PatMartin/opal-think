@@ -174,6 +174,32 @@ class TaskEngine:
         parent = self._store.get_task(causation_id)
         return int(parent["causation_depth"]) + 1 if parent else 1
 
+    @staticmethod
+    def _body_hash(body: TaskCreate) -> str:
+        return hashlib.sha256(
+            json.dumps(body.model_dump(mode="json"), sort_keys=True, default=str).encode()
+        ).hexdigest()
+
+    def replay_lookup(self, body: TaskCreate, idempotency_key: str) -> dict[str, Any] | None:
+        """Resolve a same-key retry from durable state alone — no provider access.
+
+        Returns the stored task row for a same-key + same-body retry; raises 409
+        when the key was used with a different body; returns None for a fresh key
+        (or a stale key whose task record no longer exists — ``admit`` re-admits
+        it under the transaction). ``admit`` repeats this check inside its write
+        transaction, so this read is the fast path, not the arbiter of races.
+        """
+        body_hash = self._body_hash(body)
+        with self._store.transaction() as conn:
+            existing = self._store.lookup_idempotency(conn, idempotency_key)
+            if existing is None:
+                return None
+            if existing["body_hash"] != body_hash:
+                raise OpalHTTPException(
+                    409, "conflict", "Idempotency-Key was already used with a different task body"
+                )
+            return self._store.get_task_conn(conn, existing["task_id"])
+
     def admit(
         self,
         body: TaskCreate,
@@ -186,9 +212,7 @@ class TaskEngine:
         idempotency_key: str | None,
     ) -> dict[str, Any]:
         """Atomically admit a task. Returns (row, replayed). Raises OpalHTTPException on rejection."""
-        body_hash = hashlib.sha256(
-            json.dumps(body.model_dump(mode="json"), sort_keys=True, default=str).encode()
-        ).hexdigest()
+        body_hash = self._body_hash(body)
         max_steps = min(body.max_steps or self.setting("task.default_max_steps"), self.setting("task.max_steps_limit"))
         timeout = min(
             body.timeout_seconds or self.setting("task.default_timeout_seconds"),

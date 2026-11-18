@@ -90,6 +90,12 @@ async def create_task(
     store: ThinkStore = Depends(get_store),
     ctx: OpalContext = Depends(get_context),
 ) -> Task:
+    # Idempotent replay resolves from durable state alone — before session/causation
+    # checks and model-provider access, so a retry of an admitted task succeeds even
+    # when every provider is unreachable. Fresh-admission checks below are untouched.
+    if idempotency_key and (replay := engine.replay_lookup(body, idempotency_key)) is not None:
+        response.headers["Location"] = str(request.url_for("show_task", task_id=replay["id"]))
+        return _to_task(replay)
     if body.session_id and store.get_session(body.session_id) is None:
         raise OpalHTTPException(404, "not_found", f"session not found: {body.session_id}")
     depth = engine.causation_depth(ctx.causation_id)
