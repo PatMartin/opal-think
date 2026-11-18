@@ -134,6 +134,24 @@ opal think persona remove bob                                    # ETag-guarded 
 `validate` exits non-zero when the persona is disabled or unresolvable — useful
 in scripts.
 
+To make a persona usable on tasks, give it Think's service-local bindings
+(kernel `x-opal-persona`: the model/instructions/generation binding lives in
+this service's fields; `voice_id` stays the Say binding):
+
+```bash
+# Copy
+opal think setting set persona.amy.model_id '"ollama:llama3.1:8b"'
+opal think setting set persona.amy.instructions '"Answer like a drill sergeant."'
+opal think setting set persona.amy.generation '{"max_steps": 4, "timeout_seconds": 300}'
+```
+
+Select it per task (`persona_id` on POST /task/) or as a session default
+(`persona_id` on POST /session/). Per-field precedence: explicit request field
+> persona binding > profile > service default. Unknown -> 422
+`invalid_persona`; disabled -> 422 `persona_disabled`. The resolved
+`{persona_id, revision, snapshot}` persists as `Task.persona`, so a historical
+task shows exactly which binding it ran under even after the persona is edited.
+
 ## 6. Models
 
 Models are discovered from configured providers, never installed through the
@@ -285,21 +303,39 @@ opal think --api-url http://127.0.0.1:8081 --token wrong info   # -> error: 401
 
 ## 16. OPAL-EVENT integration
 
-THINK may act on the world only through OPAL-EVENT actions (execute-scoped —
-it cannot administer actions, rules, or settings). With EVENT on 1.6.0:
+THINK may act on the world only through OPAL-EVENT actions, and only those
+explicitly permitted by `event.action_allowlist` (null/empty = model-only).
+Verified against EVENT 1.7.1, where THINK's credential is an `execute`-scoped
+named principal — optionally narrowed with `actions` and `own_receipts_only` —
+granting `actions:read` + `actions:execute` + `executions:read` and nothing
+more (administration, rules, settings, publish are denied):
 
 ```bash
 # Copy
 opal think setting set event.base_url '"http://127.0.0.1:8080"'
 opal think setting set event.credential_ref '"env:OPAL_EVENT_TOKEN"'   # secret *reference*
+opal think setting set event.action_allowlist '["gpu_diagnostics"]'   # explicit permission
 opal think info health            # event: available|degraded|unavailable|not_configured
 opal think ask "run gpu_diagnostics" --model <a tool-capable model>
 ```
 
-When `event.base_url` is unset, THINK runs model-only (no tool calls). EVENT's
+When `event.base_url` is unset, THINK runs model-only (no tool calls); when an
+allowlist is set but EVENT is unreachable at discovery, the task continues
+model-only with a visible `action discovery failed` step. Executions are
+submitted with a stable caller-scoped `Idempotency-Key` (`task:call`), so an
+ambiguous admission retries once and returns the same receipt; the
+`execution_id` persists on the action step before polling and updates in place
+to the terminal outcome. Cancelling or timing out a task does **not** cancel
+the admitted EVENT execution — EVENT has no cancel operation; the receipt
+remains retrievable at `GET /api/v1/execution/{execution_id}`. EVENT's
 422 input-schema rejections surface as tool-result errors inside the task, and
 `dropped`/`timed_out` executions come back with explanatory reasons — all
 visible in `task show` step records.
+
+`tests/integration/test_local_event_boundary.py` boots a real EVENT on
+loopback when a sibling checkout is available (`OPAL_EVENT_REPO`, default
+`../opal-event`) and verifies scoped auth, keyed-retry single admission, the
+chain-depth bound, and a watcher observing `task.completed`.
 
 ## 17. Automated testing
 

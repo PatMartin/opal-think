@@ -6,7 +6,7 @@ may act on the world **only** through registered OPAL-EVENT actions — never by
 executing model-generated shell/URL/Python directly. REST is the sole implementation
 surface; the Typer CLI and single-file SPA communicate over HTTP only.
 
-- Contract: `openapi/opal_think_v1.6.0.yaml` (vendored byte-identical at `src/opal_think/contract/`)
+- Contract: `openapi/opal_think_v1.7.1.yaml` (vendored byte-identical at `src/opal_think/contract/`)
 - Stack: FastAPI · Pydantic v2 · Typer · HTTPX · stdlib SQLite under `var/` · asyncio engine
 
 ## Quick start
@@ -45,13 +45,39 @@ reachable provider, readiness honestly returns 503. To run the service detached,
 
 ## Semantics
 
-- **Admission**: 202 + `Location`; Idempotency-Key replay/conflict; session-busy 409;
-  `task.max_concurrent` 429; causation-depth cap 422; unknown session 404; no model 503.
+- **Admission**: 202 + `Location`; Idempotency-Key replay/conflict resolves from
+  durable state *before* any provider access (a retry succeeds with every
+  provider down); session-busy 409; `task.max_concurrent` 429; causation-depth
+  cap 422; unknown session 404; unknown/disabled persona 422; no model 503.
+- **Action permissions**: model-only unless `event.action_allowlist` lists the
+  permitted EVENT action ids; the allowlist filters both tool advertisement and
+  execution-time validation, intersected with what the EVENT credential may see.
 - **Execution**: queued→running→terminal (`completed|failed|cancelled|timed_out`),
   `timeout_seconds` deadline, cooperative cancel, bounded `max_steps`, tool calls
   validated against the *enabled* EVENT action catalog before ever reaching EVENT.
+- **EVENT receipts**: the `execution_id` + submitted state persist on the action
+  step *before* any progress event or poll, then update in place to the terminal
+  outcome — one call is one durable step record. Every execute carries a stable
+  caller-scoped `Idempotency-Key` (`task:call`); an ambiguous submission retries
+  exactly once (EVENT ≥1.7 dedups to the same receipt; older versions at most
+  one duplicate, never a retry loop; 4xx never retried). THINK-side cancel or
+  timeout does **not** cancel the admitted EVENT execution — no such contract
+  operation exists; the receipt stays retrievable via `GET
+  /api/v1/execution/{id}` and the step notes the status honestly. Restart reaps
+  the task but keeps the receipt and reports it.
+- **Personas**: `TaskCreate.persona_id` selects a registered persona, else the
+  session's default (`SessionCreate.persona_id`). Per-field precedence follows
+  kernel `x-opal-persona`: request field > persona binding > profile > service
+  default. Think's bindings are the service-local settings
+  `persona.<id>.model_id` / `.instructions` / `.generation`
+  (`{max_steps, timeout_seconds}`); `voice_id` remains the Say binding. The
+  resolved `{persona_id, revision, snapshot}` persists on the task as
+  `Task.persona` — history shows exactly which binding ran even after edits.
 - **SSE**: `task.started/progress/output/action/completed/failed/cancelled/timed_out`
-  frames `{task_id,timestamp,type,data}`; live-only (no replay); late connect →
+  frames `{task_id,timestamp,type,data}`; live frames drop under backpressure
+  (no replay), but terminal frames and the stream close are *reserved* — a
+  saturated watcher can never be stranded; the idle tick also reconciles the
+  durable row and synthesizes a missed terminal snapshot. Late connect →
   terminal snapshot then close.
 - **Safety**: `<think>…</think>` stripped from answers/deltas; `action_input` =
   sanitized submitted ExecutionRequest (secret redaction, 4KB cap, `None` when
@@ -85,7 +111,7 @@ simulated vs real-model runs distinctly with model/endpoint/git provenance.
 | REST (all ops), CLI, SPA | ✅ 149 tests | smoke-verified |
 | Ollama | ✅ mocked transport | ✅ verified vs 192.168.1.88 (`OPAL_THINK_LIVE_OLLAMA` gated tests) |
 | OpenAI | ✅ mocked transport | ⚠️ opt-in smoke only (`OPAL_THINK_LIVE_*`); no credentials in CI |
-| EVENT | ✅ `FakeEventClient` | ❌ no service; execute-only auth is an EVENT 1.4.0 dependency |
+| EVENT | ✅ `FakeEventClient` + `mock_http_event` | ✅ real EVENT 1.7.1 booted locally by `tests/integration/test_local_event_boundary.py` (execute-scoped named principal); model simulated |
 
 ## SPA deployment and authentication
 
@@ -109,8 +135,13 @@ data access. Deployment notes:
 - Causation-depth bound covers THINK-owned ancestors only (cross-service chains invisible to THINK).
 - Thinking-model `<think>` blocks are stripped from output but still cost model tokens.
 - The SPA is a same-origin single file: it assumes the service is served from the same origin and cannot be pointed elsewhere (cross-origin embedding is unsupported and would need CORS decisions).
-- EVENT execute-only authorization is enforced by policy on THINK's side; EVENT 1.4.0
-  lacks scoped principals (documented external dependency).
+- EVENT execute-only authorization is enforced by EVENT ≥1.7 scoped principals
+  (verified live on 1.7.1): THINK's token should be an `execute`-scope named
+  principal, ideally narrowed with `actions` + `own_receipts_only`. On EVENT
+  versions without scoped principals, authorization is policy-only on THINK's side.
+- Cancelling or timing out a THINK task never cancels an already-admitted EVENT
+  execution — EVENT exposes no cancel operation; the durable `execution_id`
+  receipt stays retrievable for reconciliation.
 
 ## Development
 
@@ -156,6 +187,12 @@ OPAL_THINK_LIVE_EVENT=http://host:8080 OPAL_THINK_LIVE_OLLAMA=http://host:11434 
 # knobs: OPAL_THINK_LIVE_EVENT_ACTION, OPAL_THINK_LIVE_EVENT_KEY (env var name),
 #        OPAL_THINK_LIVE_TIMEOUT; evidence -> OPAL_THINK_LIVE_REPORT or $TMP
 ```
+
+When a sibling `../opal-event` checkout with a `.venv` is present (or
+`OPAL_EVENT_REPO` points at one), `tests/integration/test_local_event_boundary.py`
+boots a real EVENT 1.7.1 on loopback — no Ollama needed: scoped authorization,
+keyed-retry single admission, chain-depth bound, durable receipt, and a watcher
+observing `task.completed`, all against the live service (model simulated).
 
 ## Dotenv configuration
 

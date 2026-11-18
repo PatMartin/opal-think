@@ -1466,8 +1466,19 @@ x-opal-event-integration:
   - actions:write
   - rules:write
   - settings:write
-  note: Permission names are proposed for EVENT authorization enhancement, not claims that EVENT 1.4.0 already implements
-    them.
+  note: >-
+    Verified live against EVENT 1.7.1, where these scopes exist as an
+    `execute`-scoped named principal — optionally narrowed with `actions` and
+    `own_receipts_only` (`security.rest_auth.principals`). THINK submits every
+    execute with a stable caller-scoped `Idempotency-Key` (`task:call`), making
+    admission retry-safe (EVENT 1.7.1 dedups to the original receipt; a reused
+    key with different work is 409), and declares the derived hop via
+    `X-Opal-Chain-Depth` (task depth + 1). On EVENT versions without keyed
+    dedup an ambiguous submission produces at most one duplicate — never a
+    retry loop. Cancelling or timing out a task does not cancel the admitted
+    EVENT execution; EVENT exposes no cancel operation and the execution_id
+    receipt stays retrievable. THINK-side action permission additionally
+    requires the action id to appear in `event.action_allowlist`.
 x-opal-authorization: {$ref: './shared/opal_kernel.yaml#/x-opal-authorization'}
 x-opal-context-standard:
   version: '1.4'
