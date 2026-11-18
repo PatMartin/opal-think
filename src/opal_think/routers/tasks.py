@@ -68,6 +68,7 @@ def _to_task(row: dict[str, Any]) -> Task:
         prompt=row["prompt"],
         metadata=row.get("metadata") or {},
         session_id=row["session_id"],
+        persona=row.get("persona"),
         model_id=row["model_id"],
         max_steps=row["max_steps"],
         timeout_seconds=row["timeout_seconds"],
@@ -105,17 +106,29 @@ async def create_task(
     if idempotency_key and (replay := engine.replay_lookup(body, idempotency_key)) is not None:
         response.headers["Location"] = str(request.url_for("show_task", task_id=replay["id"]))
         return _to_task(replay)
-    if body.session_id and store.get_session(body.session_id) is None:
-        raise OpalHTTPException(404, "not_found", f"session not found: {body.session_id}")
+    session_row = None
+    if body.session_id:
+        session_row = store.get_session(body.session_id)
+        if session_row is None:
+            raise OpalHTTPException(404, "not_found", f"session not found: {body.session_id}")
+    # Persona selection: the explicit task field wins; the session's default
+    # persona applies when the task omits one. Unknown/disabled personas are
+    # refused before any provider access (kernel x-opal-persona).
+    persona_id = body.persona_id or (session_row or {}).get("persona_id")
+    persona = engine.resolve_persona(persona_id) if persona_id else None
     depth = engine.causation_depth(ctx.causation_id)
     if depth > engine.setting("task.max_causation_depth"):
         raise OpalHTTPException(
             422, "causation_depth_exceeded", "causation chain depth limit exceeded; refusing nested trigger"
         )
-    adapter, _, resolved_id, discovered = await engine.resolve_model(body.model_id)
+    # Kernel precedence per field: explicit request field > persona binding >
+    # profile > service default.
+    bound_model = ((persona or {}).get("snapshot") or {}).get("model_id")
+    adapter, _, resolved_id, discovered = await engine.resolve_model(body.model_id or bound_model)
     row, replayed = engine.admit(
         body,
         resolved_model_id=resolved_id,
+        persona=persona,
         causation_id=ctx.causation_id,
         causation_depth=depth,
         opal_session_id=ctx.session_id,

@@ -54,10 +54,12 @@ class ThinkStore:
                 "CREATE TABLE IF NOT EXISTS idempotency ("
                 "key TEXT PRIMARY KEY, task_id TEXT NOT NULL, body_hash TEXT NOT NULL, created_at TEXT NOT NULL)"
             )
+            self._ensure_column(conn, "sessions", "persona_id", "TEXT")
             self._ensure_column(conn, "tasks", "context", "TEXT")
             self._ensure_column(conn, "tasks", "steps_completed", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "tasks", "opal_session_id", "TEXT")
             self._ensure_column(conn, "tasks", "opal_transaction_id", "TEXT")
+            self._ensure_column(conn, "tasks", "persona", "TEXT")
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
@@ -80,20 +82,20 @@ class ThinkStore:
     @staticmethod
     def _session_row(conn: sqlite3.Connection, session_id: str) -> dict[str, Any] | None:
         row = conn.execute(
-            "SELECT s.id, s.title, s.created_at, s.updated_at,"
+            "SELECT s.id, s.title, s.persona_id, s.created_at, s.updated_at,"
             " (SELECT COUNT(*) FROM tasks t WHERE t.session_id = s.id) AS task_count"
             " FROM sessions s WHERE s.id = ?",
             (session_id,),
         ).fetchone()
         return dict(row) if row else None
 
-    def add_session(self, title: str | None) -> dict[str, Any]:
+    def add_session(self, title: str | None, persona_id: str | None = None) -> dict[str, Any]:
         now = _now()
         session_id = _new_id("sess")
         with self._lock, self._connect() as conn:
             conn.execute(
-                "INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?,?,?,?)",
-                (session_id, title, now, now),
+                "INSERT INTO sessions (id, title, persona_id, created_at, updated_at) VALUES (?,?,?,?,?)",
+                (session_id, title, persona_id, now, now),
             )
             return self._session_row(conn, session_id)
 
@@ -105,7 +107,7 @@ class ThinkStore:
         """Newest-updated first, deterministic (updated_at, id) DESC order; ``limit`` caps items."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT s.id, s.title, s.created_at, s.updated_at,"
+                "SELECT s.id, s.title, s.persona_id, s.created_at, s.updated_at,"
                 " (SELECT COUNT(*) FROM tasks t WHERE t.session_id = s.id) AS task_count"
                 " FROM sessions s ORDER BY s.updated_at DESC, s.id DESC LIMIT ?",
                 (limit,),
@@ -145,7 +147,7 @@ class ThinkStore:
         if row is None:
             return None
         data = dict(row)
-        for field_name in ("metadata", "context", "steps", "error"):
+        for field_name in ("metadata", "context", "steps", "error", "persona"):
             if data.get(field_name) is not None:
                 data[field_name] = json.loads(data[field_name])
         return data

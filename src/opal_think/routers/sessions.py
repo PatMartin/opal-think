@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response
 
-from opal_think.deps import get_store
+from opal_think.deps import get_settings, get_store
 from opal_think.errors import OpalHTTPException
 from opal_think.schemas import Session, SessionCreate
+from opal_think.settings_registry import SettingsRegistry
 from opal_think.store import ThinkStore
 
 router = APIRouter(prefix="/api/v1/session", tags=["sessions"])
@@ -23,6 +24,7 @@ def _session_payload(row: dict) -> Session:
     return Session(
         id=row["id"],
         title=row["title"],
+        persona_id=row.get("persona_id"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         task_count=row["task_count"],
@@ -42,8 +44,11 @@ def add_session(
     request: Request,
     response: Response,
     store: ThinkStore = Depends(get_store),
+    settings: SettingsRegistry = Depends(get_settings),
 ) -> Session:
-    row = store.add_session(body.title)
+    if body.persona_id is not None and settings.store.get_persona(body.persona_id) is None:
+        raise OpalHTTPException(422, "invalid_persona", f"unknown persona: {body.persona_id}")
+    row = store.add_session(body.title, body.persona_id)
     response.headers["Location"] = str(request.url_for("show_session", session_id=row["id"]))
     return _session_payload(row)
 

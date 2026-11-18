@@ -175,6 +175,35 @@ class TaskEngine:
         parent = self._store.get_task(causation_id)
         return int(parent["causation_depth"]) + 1 if parent else 1
 
+    def resolve_persona(self, persona_id: str) -> dict[str, Any]:
+        """Resolve a selected persona to its record + Think binding snapshot.
+
+        Kernel ``x-opal-persona``: a request referencing an unknown persona is
+        refused 422; a disabled persona is refused 422/409 on use while its
+        record stays readable. The Think binding (model/instructions/generation)
+        lives in this service's local ``persona.<id>.*`` settings; ``voice_id``
+        is the Say binding, recorded for consumers (Think never speaks).
+        Returns ``{persona_id, revision, snapshot}`` — the snapshot plus the
+        global config revision persist on the task for inspection and replay.
+        """
+        record = self._settings.store.get_persona(persona_id)
+        if record is None:
+            raise OpalHTTPException(422, "invalid_persona", f"unknown persona: {persona_id}")
+        if not record["enabled"]:
+            raise OpalHTTPException(422, "persona_disabled", f"persona is disabled: {persona_id}")
+        return {
+            "persona_id": persona_id,
+            "revision": self._settings.store.global_revision(),
+            "snapshot": {
+                "name": record["name"],
+                "voice_id": record["voice_id"],
+                "origin": record["origin"],
+                "model_id": self.setting(f"persona.{persona_id}.model_id"),
+                "instructions": self.setting(f"persona.{persona_id}.instructions"),
+                "generation": self.setting(f"persona.{persona_id}.generation") or {},
+            },
+        }
+
     @staticmethod
     def _body_hash(body: TaskCreate) -> str:
         return hashlib.sha256(
@@ -206,6 +235,7 @@ class TaskEngine:
         body: TaskCreate,
         *,
         resolved_model_id: str,
+        persona: dict[str, Any] | None = None,
         causation_id: str | None,
         causation_depth: int,
         opal_session_id: str | None,
@@ -214,9 +244,15 @@ class TaskEngine:
     ) -> dict[str, Any]:
         """Atomically admit a task. Returns (row, replayed). Raises OpalHTTPException on rejection."""
         body_hash = self._body_hash(body)
-        max_steps = min(body.max_steps or self.setting("task.default_max_steps"), self.setting("task.max_steps_limit"))
+        # Kernel precedence per field: explicit request field > persona binding >
+        # profile > service default (profiles fold into the settings at activation).
+        generation = ((persona or {}).get("snapshot") or {}).get("generation") or {}
+        max_steps = min(
+            body.max_steps or generation.get("max_steps") or self.setting("task.default_max_steps"),
+            self.setting("task.max_steps_limit"),
+        )
         timeout = min(
-            body.timeout_seconds or self.setting("task.default_timeout_seconds"),
+            body.timeout_seconds or generation.get("timeout_seconds") or self.setting("task.default_timeout_seconds"),
             self.setting("task.timeout_limit_seconds"),
         )
         with self._store.transaction() as conn:
@@ -260,6 +296,7 @@ class TaskEngine:
                 "created_at": _now(),
                 "started_at": None,
                 "finished_at": None,
+                "persona": persona,
                 "causation_id": causation_id,
                 "causation_depth": causation_depth,
                 "opal_session_id": opal_session_id,
@@ -790,6 +827,11 @@ class TaskEngine:
 
     def _build_messages(self, row: dict[str, Any]) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [{"role": "system", "content": _SYSTEM_PROMPT}]
+        snapshot = ((row.get("persona") or {}).get("snapshot") or {})
+        if instructions := snapshot.get("instructions"):
+            messages.append(
+                {"role": "system", "content": f"Persona ({snapshot.get('name')}) instructions: {instructions}"}
+            )
         if row.get("context"):
             context_json = json.dumps(row["context"], default=str)
             messages.append({"role": "system", "content": f"Caller-supplied context (untrusted): {context_json}"})

@@ -1059,6 +1059,8 @@ components:
           description: Optional existing managed Session ID. Omit for a stateless task.
           minLength: 1
           maxLength: 128
+        persona_id:
+          $ref: './shared/opal_kernel.yaml#/components/schemas/OpalPersonaRef'
         model_id:
           type: string
           description: Optional model override; omit to use configured default.
@@ -1091,8 +1093,15 @@ components:
             reject sensitive content, and persist it with the Task for later retrieval.
       required:
       - prompt
-      description: Universal entry point for ask, chat, autonomous tasks and EVENT-triggered work. Omission of session_id
-        does not create a session.
+      description: >-
+        Universal entry point for ask, chat, autonomous tasks and EVENT-triggered
+        work. Omission of session_id does not create a session. `persona_id`
+        selects a registered OPAL persona: its service-local bindings
+        (persona.<id>.model_id / .instructions / .generation) supply per-field
+        defaults below any explicit request fields (kernel precedence: request >
+        persona binding > profile > service default), and override the session's
+        default persona. Referencing an unknown persona returns 422
+        invalid_persona; a disabled persona returns 422 persona_disabled.
     TaskStep:
       type: object
       additionalProperties: false
@@ -1170,6 +1179,10 @@ components:
           type:
           - string
           - 'null'
+        persona:
+          oneOf:
+          - $ref: '#/components/schemas/TaskPersona'
+          - type: 'null'
         model_id:
           type: string
           description: Resolved model ID actually used.
@@ -1216,6 +1229,7 @@ components:
       - status
       - prompt
       - session_id
+      - persona
       - model_id
       - max_steps
       - timeout_seconds
@@ -1227,6 +1241,30 @@ components:
       - created_at
       - started_at
       - finished_at
+    TaskPersona:
+      type: object
+      additionalProperties: false
+      properties:
+        persona_id:
+          $ref: './shared/opal_kernel.yaml#/components/schemas/OpalPersonaRef'
+        revision:
+          type: integer
+          minimum: 0
+          description: Global portable-config revision at admission (the "s<n>" behind settings/persona ETags).
+        snapshot:
+          type: object
+          additionalProperties: true
+          description: >-
+            Resolved persona at admission: name, voice_id (the Say binding),
+            origin, and the service-local persona.<id>.* bindings (model_id,
+            instructions, generation) that were applied. Historical tasks keep
+            the snapshot they ran under; later persona or binding edits do not
+            alter this record.
+      required:
+      - persona_id
+      - revision
+      - snapshot
+      description: Resolved persona selection persisted on the task for inspection and reproducibility.
     TaskFailure:
       type: object
       additionalProperties: false
@@ -1253,7 +1291,13 @@ components:
           description: Optional human-readable label.
           minLength: 1
           maxLength: 200
-      description: Create an optional conversation context; does not start a task.
+        persona_id:
+          $ref: './shared/opal_kernel.yaml#/components/schemas/OpalPersonaRef'
+      description: >-
+        Create an optional conversation context; does not start a task.
+        `persona_id` sets the session's default persona: tasks created in this
+        session that omit their own persona_id resolve it instead. Referencing
+        an unknown persona returns 422 invalid_persona.
     Session:
       type: object
       additionalProperties: false
@@ -1264,6 +1308,11 @@ components:
           type:
           - string
           - 'null'
+        persona_id:
+          type:
+          - string
+          - 'null'
+          description: Default persona for tasks in this session; null when unset.
         created_at:
           type: string
           format: date-time
@@ -1276,6 +1325,7 @@ components:
       required:
       - id
       - title
+      - persona_id
       - created_at
       - updated_at
       - task_count

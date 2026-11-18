@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 _PROVIDER_KEY = re.compile(r"^providers\.([a-z][a-z0-9_-]{0,63})\.(type|base_url|enabled|credential_ref)$")
+_PERSONA_KEY = re.compile(r"^persona\.([A-Za-z0-9][A-Za-z0-9._-]{0,199})\.(model_id|instructions|generation)$")
 _SECRET_REF = re.compile(r"^(env:[A-Za-z_][A-Za-z0-9_]{0,127}|[A-Z][A-Z0-9_]{2,127})$")
 _URL = re.compile(r"^https?://[!-~]+$")
 
@@ -101,6 +102,29 @@ def _check_action_id_list_or_null(v: Any) -> str | None:
     return None
 
 
+_PERSONA_GENERATION_FIELDS: dict[str, tuple[int, int]] = {
+    "max_steps": (1, 100),
+    "timeout_seconds": (1, 3600),
+}
+
+
+def _check_persona_generation(v: Any) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        return "must be an object or null"
+    allowed = ", ".join(sorted(_PERSONA_GENERATION_FIELDS))
+    for key, value in v.items():
+        bounds = _PERSONA_GENERATION_FIELDS.get(key)
+        if bounds is None:
+            return f"unsupported generation key {key!r} (allowed: {allowed})"
+        if not _is_int(value):
+            return f"generation.{key} must be an integer"
+        if not bounds[0] <= value <= bounds[1]:
+            return f"generation.{key} must be between {bounds[0]} and {bounds[1]}"
+    return None
+
+
 FIXED_SETTINGS: dict[str, SettingDef] = {
     "models.default_id": SettingDef("models.default_id", None, _check_str_or_null()),
     "event.base_url": SettingDef("event.base_url", None, _check_url_or_null),
@@ -134,14 +158,26 @@ _PROVIDER_FIELD_DEFS: dict[str, SettingDef] = {
     "credential_ref": SettingDef("providers.*.credential_ref", None, _check_secret_ref, secret_ref=True),
 }
 
+# Think's service-local persona bindings (kernel x-opal-persona: the think
+# binding lives in this service's local fields; Think validates). ``model_id``
+# is a model id like ``fake:echo``; ``instructions`` become a system message;
+# ``generation`` carries the task-level knobs the persona supplies by default.
+_PERSONA_FIELD_DEFS: dict[str, SettingDef] = {
+    "model_id": SettingDef("persona.*.model_id", None, _check_str_or_null(200)),
+    "instructions": SettingDef("persona.*.instructions", None, _check_str_or_null(4000)),
+    "generation": SettingDef("persona.*.generation", None, _check_persona_generation),
+}
+
 
 def lookup(key: str) -> SettingDef | None:
-    """Resolve a setting definition: fixed key, then the dynamic providers.<id>.<field> pattern."""
+    """Resolve a setting definition: fixed key, then the dynamic providers.<id>.<field>
+    and persona.<id>.<field> patterns."""
     if key in FIXED_SETTINGS:
         return FIXED_SETTINGS[key]
-    match = _PROVIDER_KEY.match(key)
-    if match:
+    if match := _PROVIDER_KEY.match(key):
         return _PROVIDER_FIELD_DEFS[match.group(2)]
+    if match := _PERSONA_KEY.match(key):
+        return _PERSONA_FIELD_DEFS[match.group(2)]
     return None
 
 

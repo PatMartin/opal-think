@@ -69,6 +69,9 @@ class TaskStatus(StrEnum):
 
 TERMINAL_TASK_STATUSES = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.TIMED_OUT}
 
+# Kernel ``OpalPersonaRef``: globally unique OPAL persona identifier.
+_PERSONA_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
 
 class TaskCreate(BaseModel):
     """Universal entry point for ask, chat, autonomous tasks and EVENT-triggered work."""
@@ -77,6 +80,7 @@ class TaskCreate(BaseModel):
 
     prompt: str = Field(min_length=1, max_length=32768)
     session_id: str | None = Field(default=None, min_length=1, max_length=128)
+    persona_id: str | None = Field(default=None, min_length=1, max_length=200, pattern=_PERSONA_ID_PATTERN)
     model_id: str | None = Field(default=None, min_length=1, max_length=200)
     context: dict[str, Any] | None = None
     max_steps: int | None = Field(default=None, ge=1, le=100)
@@ -108,6 +112,19 @@ class TaskFailure(BaseModel):
     message: str
 
 
+class TaskPersona(BaseModel):
+    """Resolved persona selection persisted at admission for inspection and
+    reproducibility: which persona ran, under which portable-config revision
+    (the ``"s<n>"`` ETag basis), and the binding snapshot that was applied.
+    Later persona or binding edits do not alter this record."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    persona_id: str
+    revision: int = Field(ge=0)
+    snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
 class Task(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -116,6 +133,7 @@ class Task(BaseModel):
     prompt: str
     metadata: dict[str, Any] = Field(default_factory=dict)
     session_id: str | None
+    persona: TaskPersona | None = None
     model_id: str
     max_steps: int = Field(ge=1)
     timeout_seconds: int = Field(ge=1)
@@ -135,6 +153,7 @@ class SessionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
+    persona_id: str | None = Field(default=None, min_length=1, max_length=200, pattern=_PERSONA_ID_PATTERN)
 
 
 class Session(BaseModel):
@@ -142,6 +161,7 @@ class Session(BaseModel):
 
     id: str
     title: str | None
+    persona_id: str | None = None
     created_at: datetime
     updated_at: datetime
     task_count: int = Field(ge=0)
@@ -314,8 +334,6 @@ class BackupCreateResponse(BaseModel):
 
 
 # -- personas (v1.7.1; shared OPAL persona identifiers introduced by OPAL Say) ----------------------------
-
-_PERSONA_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
 
 _T = TypeVar("_T")
 
