@@ -37,9 +37,13 @@ class _StubProviders:
 
 
 def _engine(tmp_path, adapter, with_event=False) -> TaskEngine:
+    settings = SettingsRegistry(SettingsStore(tmp_path / "s.db"))
+    if with_event:
+        # tool-capable defaults are only demanded when tasks may actually act
+        settings.store.set_many({"event.action_allowlist": ["gpu_diagnostics"]})
     engine = TaskEngine(
         ThinkStore(tmp_path / "t.db"),
-        SettingsRegistry(SettingsStore(tmp_path / "s.db")),
+        settings,
         _StubProviders(adapter),
     )
     engine.event_client_factory = lambda: FakeEventClient() if with_event else None

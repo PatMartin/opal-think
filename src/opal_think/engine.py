@@ -143,8 +143,8 @@ class TaskEngine:
         # The default must actually be able to *generate*: catalogs are names-only, so
         # embedding-only models (e.g. all-minilm) would otherwise win alphabetically.
         # Verify candidates via /api/show (bounded) and take the first generative one —
-        # additionally tool-capable when EVENT is configured.
-        want_tools = self._event_client() is not None
+        # additionally tool-capable only when tasks are actually permitted to act.
+        want_tools = self._event_client() is not None and bool(self.setting("event.action_allowlist"))
         for cand_adapter, cand_model in available[:8]:
             shown = cand_model
             if not cand_model.capabilities_verified:
@@ -347,21 +347,35 @@ class TaskEngine:
             "causation_id": task_id,
         }
         event_client = self._event_client()
+        # Action permission is explicit: only ids in the configured allowlist may
+        # ever be advertised or invoked. ``allowed`` = allowlist ∩ actions the
+        # EVENT credential is permitted to see that are enabled — the intersection
+        # composes THINK's policy with the EVENT principal's own action narrowing.
+        allowlist = self.setting("event.action_allowlist") or []
         tools: list[dict[str, Any]] = []
         allowed: set[str] = set()
         schemas: dict[str, Any] = {}
-        if event_client is not None and self._tools_allowed(discovered):
+        if event_client is not None and allowlist and self._tools_allowed(discovered):
             try:
                 actions = await event_client.list_actions(context)
-                enabled = [a for a in actions if a.get("enabled")]
-                # `allowed`/`schemas` cover every enabled action — any registered
-                # action stays invocable by name; selection only bounds which
-                # specs are advertised to the model.
-                allowed = {a["id"] for a in enabled}
-                schemas = {a["id"]: a.get("input_schema") for a in enabled}
-                tools = self._select_tools(enabled, row["prompt"])
+                permitted = [a for a in actions if a.get("enabled") and a.get("id") in allowlist]
+                allowed = {a["id"] for a in permitted}
+                schemas = {a["id"]: a.get("input_schema") for a in permitted}
+                tools = self._select_tools(permitted, row["prompt"])
             except OpalHTTPException:
-                allowed, tools, schemas = set(), [], {}  # EVENT down at discovery -> model-only mode
+                # Actions were permitted but EVENT is unreachable at discovery:
+                # degrade to model-only, observably — the step log shows the
+                # task ran under a degraded action policy rather than silently.
+                telemetry["event_discovery"] = "unavailable"
+                self._append_step(
+                    task_id,
+                    {
+                        "kind": "reasoning",
+                        "summary": "action discovery failed (EVENT unreachable); continuing model-only",
+                        "status": "failed",
+                        "at": _now(),
+                    },
+                )
             if tools:
                 names = ", ".join(sorted(allowed))
                 messages.append(
@@ -369,7 +383,7 @@ class TaskEngine:
                         "role": "system",
                         "content": (
                             "External actions are available only as OPAL-EVENT tool calls. "
-                            f"Enabled actions: {names}. To act, request a tool call whose arguments are "
+                            f"Permitted actions: {names}. To act, request a tool call whose arguments are "
                             'an event envelope {"topic": <topic>, "data": {...}}. Never claim an action '
                             "succeeded until the tool result says so."
                         ),

@@ -90,10 +90,25 @@ def _check_secret_ref(v: Any) -> str | None:
     return None
 
 
+def _check_action_id_list_or_null(v: Any) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, list):
+        return "must be a list of EVENT action ids or null"
+    for item in v:
+        if not isinstance(item, str) or not 1 <= len(item) <= 128:
+            return "must contain only action id strings of 1..128 characters"
+    return None
+
+
 FIXED_SETTINGS: dict[str, SettingDef] = {
     "models.default_id": SettingDef("models.default_id", None, _check_str_or_null()),
     "event.base_url": SettingDef("event.base_url", None, _check_url_or_null),
     "event.credential_ref": SettingDef("event.credential_ref", None, _check_secret_ref, secret_ref=True),
+    # Explicit action permission: null/[] = model-only (no tools advertised, every
+    # model-requested call rejected); a non-empty list permits exactly those action
+    # ids, intersected at runtime with what the EVENT credential may see and run.
+    "event.action_allowlist": SettingDef("event.action_allowlist", None, _check_action_id_list_or_null),
     "task.default_max_steps": SettingDef("task.default_max_steps", 8, _check_int(1, 100)),
     "task.max_steps_limit": SettingDef("task.max_steps_limit", 25, _check_int(1, 100)),
     "task.default_timeout_seconds": SettingDef("task.default_timeout_seconds", 120, _check_int(1, 3600)),

@@ -92,18 +92,6 @@ def run_case(evalset_name: str, case: dict[str, Any], tmp_path: Path) -> tuple[d
         app.state.settings.store.set_many(
             {"providers.ollama.enabled": False, "providers.fake.type": "fake", "providers.fake.enabled": True}
         )
-        fake = next(a for a in app.state.providers.adapters() if a.provider_id == "fake")
-        if delay := case.get("delay"):
-            fake.delay = float(delay)
-        script = [
-            Generation(
-                text=entry.get("text", ""),
-                tool_calls=[ToolCallRequest(t["action_id"], t.get("event") or {}) for t in entry.get("tool_calls", [])],
-            )
-            for entry in case.get("script", [])
-        ]
-        if script:
-            fake.set_script(script)
     event_client = _UnavailableEventClient() if case.get("event_unavailable") else None
     event_api: MockEventApi | None = None
     if not live and not case.get("event_unavailable"):
@@ -121,6 +109,31 @@ def run_case(evalset_name: str, case: dict[str, Any], tmp_path: Path) -> tuple[d
                 event_client.reject_ids.add(action_id)
     if event_client is not None:
         app.state.event_client = event_client
+        # Acting is opt-in (event.action_allowlist): default to every action id the
+        # case's EVENT backend knows plus scripted call ids; a case may override or
+        # empty it via ``action_allowlist: []`` to exercise the model-only posture.
+        if "action_allowlist" in case:
+            allow = case["action_allowlist"]
+        else:
+            known = [a["id"] for a in getattr(event_client, "actions", []) or []]
+            scripted = [t["action_id"] for e in case.get("script", []) for t in e.get("tool_calls", [])]
+            allow = sorted({*known, *scripted})
+        app.state.settings.store.set_many({"event.action_allowlist": allow})
+    if not live:
+        # After every set_many: settings revisions rebuild the adapter cache, so
+        # the script/delay must be applied to the fresh adapter instance.
+        fake = next(a for a in app.state.providers.adapters() if a.provider_id == "fake")
+        if delay := case.get("delay"):
+            fake.delay = float(delay)
+        script = [
+            Generation(
+                text=entry.get("text", ""),
+                tool_calls=[ToolCallRequest(t["action_id"], t.get("event") or {}) for t in entry.get("tool_calls", [])],
+            )
+            for entry in case.get("script", [])
+        ]
+        if script:
+            fake.set_script(script)
 
     body: dict[str, Any] = {
         "prompt": case["prompt"],

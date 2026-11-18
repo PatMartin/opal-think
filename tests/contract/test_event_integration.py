@@ -34,9 +34,14 @@ def _wait_terminal(client: TestClient, task_id: str, seconds: float = 5.0) -> di
 
 
 def _script_task(client: TestClient, script: list[Generation], event_client=None) -> dict:
-    _fake(client).set_script(script)
     if event_client is not None:
         client.app.state.event_client = event_client
+        # Acting is opt-in: the configured allowlist permits exactly these actions.
+        # Settings writes rebuild adapters (revision cache), so this must precede set_script.
+        client.app.state.settings.store.set_many(
+            {"event.action_allowlist": [a["id"] for a in event_client.actions]}
+        )
+    _fake(client).set_script(script)
     task_id = client.post("/api/v1/task/", json={"prompt": "diagnose the gpu", "model_id": "fake:script"}).json()["id"]
     return _wait_terminal(client, task_id)
 

@@ -47,9 +47,10 @@ def _frames(response) -> list[dict]:
 def test_absolute_deadline_bounds_all_steps(task_client: TestClient) -> None:
     """4 scripted tool-call steps at 0.5s each + 1s task deadline -> timed_out ~1s,
     not 1s per step (per-call budgets would allow ~2.5s of work)."""
-    fake = _fake(task_client)
-    fake.delay = 0.5
     task_client.app.state.event_client = FakeEventClient()
+    task_client.app.state.settings.store.set_many({"event.action_allowlist": ["gpu_diagnostics"]})
+    fake = _fake(task_client)  # after settings writes: set_many rebuilds adapters
+    fake.delay = 0.5
     script = [Generation("", tool_calls=[ToolCallRequest("gpu_diagnostics", {"topic": "t", "data": {}})]) for _ in range(4)]
     script.append(Generation("final answer"))
     fake.set_script(script)
@@ -65,10 +66,11 @@ def test_absolute_deadline_bounds_all_steps(task_client: TestClient) -> None:
 
 
 def test_cancel_during_event_poll(task_client: TestClient) -> None:
-    fake = _fake(task_client)
     event = FakeEventClient()
     event.set_result("gpu_diagnostics", status="running")  # never terminal -> poll loop
     task_client.app.state.event_client = event
+    task_client.app.state.settings.store.set_many({"event.action_allowlist": ["gpu_diagnostics"]})
+    fake = _fake(task_client)  # after settings writes: set_many rebuilds adapters
     fake.set_script([Generation("", tool_calls=[ToolCallRequest("gpu_diagnostics", {"topic": "t", "data": {}})])])
     task_id = task_client.post(
         "/api/v1/task/", json={"prompt": "x", "model_id": "fake:script"}

@@ -58,6 +58,10 @@ def _fake(task_client: TestClient):
 
 def _wire_event(task_client: TestClient, api: MockEventApi, credential_ref: str | None = None) -> None:
     task_client.app.state.event_client = api.client(credential_ref)
+    # Acting is opt-in: permit exactly the fixture's action ids.
+    task_client.app.state.settings.store.set_many(
+        {"event.action_allowlist": [a["id"] for a in api.actions]}
+    )
 
 
 def _wait_terminal(client: TestClient, task_id: str, seconds: float = 5.0) -> dict:
