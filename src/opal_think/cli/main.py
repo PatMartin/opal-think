@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import click
 import typer
 from rich.console import Console
 from rich.text import Text
@@ -990,85 +989,98 @@ except Exception:  # noqa: BLE001
 
 
 
-def _param_label(param: click.Parameter) -> tuple[str, bool]:
-    """(label, optional): [--flag] for optional, --flag for required,
-    <arg>/[<arg>] for arguments.
-
-    Typer vendors its own click classes, so options are detected by the presence
-    of ``opts`` rather than isinstance."""
-    opts = list(getattr(param, "opts", None) or []) + list(getattr(param, "secondary_opts", None) or [])
-    if any(o.startswith("-") for o in opts):
-        label = next((o for o in opts if o.startswith("--")), opts[0])
-        text = label if param.required else f"[{label}]"
-    else:  # positional argument (vendored click Arguments expose non-dash opts too)
-        text = f"<{param.name}>" if param.required else f"[<{param.name}>]"
-    if param.help:
-        text += f"  # {param.help}"
-    return text, not param.required
+# -- `opal think tree` --------------------------------------------------------------------------
+# Mirrors `opal-listen`'s tree renderer: parameters are styled usage labels appended to each
+# command's own label (yellow when required, dim when bracketed), not separate child nodes.
 
 
-def _tree_items(command: click.Command) -> list[tuple[str, object]]:
-    """Ordered tree items: parameters then subcommands, sorted; hidden commands skipped."""
-    params = sorted(
-        (p for p in getattr(command, "params", []) if "--help" not in (getattr(p, "opts", None) or [])),
-        key=lambda p: p.name,
-    )
-    subs = sorted(
-        (name, sub)
-        for name, sub in (getattr(command, "commands", None) or {}).items()
-        if not getattr(sub, "hidden", False)
-    )
-    return [("param", p) for p in params] + [("cmd", s) for s in subs]
+def _param_label(param: object) -> tuple[str, str] | None:
+    """A param's ``(text, style)`` — yellow when required, dim when bracketed — or None to skip it."""
+    if getattr(param, "hidden", False) or getattr(param, "expose_value", True) is False:
+        return None
+    kind = getattr(param, "param_type_name", "")
+    required = getattr(param, "required", False)
+    style = "yellow" if required else "dim"
+    if kind == "argument":
+        name = param.name  # type: ignore[attr-defined]
+        return (name if required else f"[{name}]", style)
+    if kind != "option":
+        return None
+    opts = [*getattr(param, "opts", ()), *getattr(param, "secondary_opts", ())]
+    flag = next((o for o in opts if o.startswith("--")), opts[0] if opts else param.name)  # type: ignore[attr-defined]
+    if flag == "--help":
+        return None
+    return (flag if required else f"[{flag}]", style)
 
 
-def _tree_lines(command: click.Command, prefix: str, lines: list[str]) -> None:
-    """Depth-first walk: parameters then subcommands, sorted, pure-ASCII connectors."""
-    items = _tree_items(command)
-    for index, (kind, item) in enumerate(items):
-        last = index == len(items) - 1
-        connector = "`-- " if last else "|-- "
-        if kind == "param":
-            lines.append(prefix + connector + _param_label(item)[0])
-        else:
-            name, sub = item
-            lines.append(prefix + connector + name)
-            _tree_lines(sub, prefix + ("    " if last else "|   "), lines)
+def _usage_labels(cmd: object) -> list[tuple[str, str]]:
+    return [label for p in getattr(cmd, "params", ()) if (label := _param_label(p))]
 
 
-def _rich_tree(command: click.Command, root_label: str) -> Tree:
-    """Build a ``rich.tree.Tree``: bold green root, blue guides, bold-cyan command
-    groups, cyan leaf commands, yellow required params, dim optional params."""
-    tree = Tree(Text(root_label, style="bold green"), guide_style="blue")
+def _visible_commands(group: object) -> list[tuple[str, object]]:
+    return [(name, cmd) for name, cmd in getattr(group, "commands", {}).items() if not getattr(cmd, "hidden", False)]
 
-    def populate(parent: Tree, cmd: click.Command) -> None:
-        for kind, item in _tree_items(cmd):
-            if kind == "param":
-                label, optional = _param_label(item)
-                parent.add(Text(label, style="dim" if optional else "yellow"), guide_style="blue")
-            else:
-                name, sub = item
-                is_group = bool(getattr(sub, "commands", None))
-                child = parent.add(Text(name, style="bold cyan" if is_group else "cyan"), guide_style="blue")
-                populate(child, sub)
 
-    populate(tree, command)
+def _is_group(cmd: object) -> bool:
+    return bool(getattr(cmd, "commands", None))
+
+
+def _styled_label(name: str, cmd: object, name_style: str) -> Text:
+    text = Text(name, style=name_style)
+    for label, style in _usage_labels(cmd):
+        text.append(f" {label}", style=style)
+    return text
+
+
+def _plain_label(name: str, cmd: object) -> str:
+    return " ".join([name, *(label for label, _ in _usage_labels(cmd))])
+
+
+def _add_commands(node: Tree, group: object) -> None:
+    for name, cmd in _visible_commands(group):
+        child = node.add(_styled_label(name, cmd, "bold cyan" if _is_group(cmd) else "cyan"), guide_style="blue")
+        if _is_group(cmd):
+            _add_commands(child, cmd)
+
+
+def _rich_tree(root: object, label: str) -> Tree:
+    """Render a click Command/Group as a styled rich Tree rooted at ``label``."""
+    tree = Tree(_styled_label(label, root, "bold green"), guide_style="blue")
+    _add_commands(tree, root)
     return tree
+
+
+def _ascii_lines(group: object, prefix: str) -> list[str]:
+    visible = _visible_commands(group)
+    lines: list[str] = []
+    for i, (name, cmd) in enumerate(visible):
+        last = i == len(visible) - 1
+        lines.append(f"{prefix}{'`-- ' if last else '|-- '}{_plain_label(name, cmd)}")
+        if _is_group(cmd):
+            lines.extend(_ascii_lines(cmd, prefix + ("    " if last else "|   ")))
+    return lines
+
+
+def _ascii_tree(root: object, label: str) -> str:
+    """Render a click Command/Group as a color-free ASCII tree rooted at ``label``."""
+    lines = [_plain_label(label, root)]
+    lines.extend(_ascii_lines(root, ""))
+    return "\n".join(lines)
 
 
 @think_app.command("tree", help="Print the full CLI command/argument tree.")
 def tree_cmd(
     ascii_guides: bool = typer.Option(
-        False, "--ascii", help="Pure-ASCII guides (|, |--, `--), color-free — safe for logs"
+        False, "--ascii", help="ASCII guides, no color (safe for logs and pipes)."
     ),
 ) -> None:
     """Render the command/argument tree — rich colors on a terminal, plain
     Unicode box-drawing when piped; ``--ascii`` for a pure-ASCII variant."""
+    root = get_command(think_app)
     if ascii_guides:
-        lines = ["opal-think"]
-        _tree_lines(get_command(think_app), "", lines)
-        typer.echo("\n".join(lines))
-        return
-    Console().print(_rich_tree(get_command(think_app), "opal-think"))
+        typer.echo(_ascii_tree(root, "opal-think"))
+    else:
+        Console().print(_rich_tree(root, "opal-think"))
 
 
 if __name__ == "__main__":
