@@ -116,15 +116,27 @@ class HttpEventClient:
             ("session_id", "X-Opal-Session-Id"),
             ("transaction_id", "X-Opal-Transaction-Id"),
             ("causation_id", "X-Opal-Causation-Id"),
+            ("chain_depth", "X-Opal-Chain-Depth"),
         ):
             if context.get(key):
                 headers[header] = context[key]
         return headers
 
-    async def _call(self, method: str, path: str, context: dict, **kwargs: Any) -> httpx.Response:
+    async def _call(
+        self,
+        method: str,
+        path: str,
+        context: dict,
+        *,
+        extra_headers: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        headers = self._headers(context)
+        if extra_headers:
+            headers.update(extra_headers)
         try:
             async with httpx.AsyncClient(timeout=10.0, transport=self._transport) as client:
-                response = await client.request(method, f"{self._base}{path}", headers=self._headers(context), **kwargs)
+                response = await client.request(method, f"{self._base}{path}", headers=headers, **kwargs)
         except httpx.HTTPError as exc:
             raise EventUnavailable(f"EVENT unreachable: {exc}") from exc
         if response.status_code == 404:
@@ -148,10 +160,25 @@ class HttpEventClient:
         data = (await self._call("GET", "/api/v1/action/", context)).json()
         return data.get("items", data) if isinstance(data, dict) else data
 
-    async def execute(self, action_id: str, event: dict[str, Any], context: dict[str, str | None]) -> dict[str, Any]:
-        """Enqueue one execution; the 202 Execution record is admission, not outcome."""
+    async def execute(
+        self,
+        action_id: str,
+        event: dict[str, Any],
+        context: dict[str, str | None],
+        submission_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Enqueue one execution; the 202 Execution record is admission, not outcome.
+
+        ``submission_key`` rides as EVENT's caller-scoped ``Idempotency-Key``
+        (contract 1.7.1): a retry with the same key and identical payload returns
+        the stored receipt instead of a second execution. Older EVENT versions
+        ignore the header harmlessly.
+        """
+        extra = {"Idempotency-Key": submission_key} if submission_key else None
         return (
-            await self._call("POST", f"/api/v1/action/{action_id}/execute", context, json={"event": event})
+            await self._call(
+                "POST", f"/api/v1/action/{action_id}/execute", context, extra_headers=extra, json={"event": event}
+            )
         ).json()
 
     async def get_execution(self, execution_id: str, context: dict[str, str | None]) -> dict[str, Any]:
@@ -177,12 +204,20 @@ class FakeEventClient:
     async def list_actions(self, context: dict[str, str | None]) -> list[dict[str, Any]]:
         return list(self.actions)
 
-    async def execute(self, action_id: str, event: dict[str, Any], context: dict[str, str | None]) -> dict[str, Any]:
+    async def execute(
+        self,
+        action_id: str,
+        event: dict[str, Any],
+        context: dict[str, str | None],
+        submission_key: str | None = None,
+    ) -> dict[str, Any]:
         if action_id in self.reject_ids:
             raise OpalHTTPException(422, "event_rejected", f"EVENT rejected action '{action_id}' input_schema")
         self._seq += 1
         execution_id = f"exec_{self._seq}"
-        self.calls.append({"action_id": action_id, "event": event, "execution_id": execution_id})
+        self.calls.append(
+            {"action_id": action_id, "event": event, "execution_id": execution_id, "submission_key": submission_key}
+        )
         return {"id": execution_id, "action_id": action_id, "status": "queued", "trigger": "manual", "created_at": "t"}
 
     async def get_execution(self, execution_id: str, context: dict[str, str | None]) -> dict[str, Any]:

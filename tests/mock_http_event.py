@@ -1,8 +1,8 @@
 """``mock_http_event``: released-contract EVENT fixture over ``httpx.MockTransport``.
 
-Provenance: this fixture models the released ``opal_event_v1.6.0.yaml`` surface that
-THINK consumes (verified against ``opal-event`` @ contract 1.6.0 at implementation
-time):
+Provenance: this fixture models the ``opal_event_v1.7.1.yaml`` surface that THINK
+consumes (verified against ``opal-event`` @ contract 1.7.1, incl. the caller-scoped
+``Idempotency-Key`` retry-safe execute admission):
 
 - ``GET /api/v1/action/`` -> 200 ``ActionList`` ``[...]``
 - ``POST /api/v1/action/{action_id}/execute`` body ``{event: {...}}`` -> 202
@@ -24,6 +24,7 @@ subprocesses. ``requests`` records the full wire exchange for assertions.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import re
@@ -36,7 +37,7 @@ import jsonschema
 from opal_think.event_client import HttpEventClient
 
 PROVENANCE = "mock_http_event"
-CONTRACT_SOURCE = "opal_event_v1.6.0.yaml"
+CONTRACT_SOURCE = "opal_event_v1.7.1.yaml"
 
 _BASE_URL = "http://event.test"
 _TOPIC_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$")
@@ -76,6 +77,8 @@ class MockEventApi:
         self._execute_overrides: dict[str, Any] = {}  # action_id -> int status or raw JSON payload
         self.poll_failures = 0  # polls answered 503 before succeeding (transient)
         self.forced_poll_status: str | None = None  # every poll returns this status
+        self.drop_execute_responses = 0  # admit normally but answer N executes with 503
+        self._idempotency: dict[str, tuple[str, str]] = {}  # key -> (fingerprint, execution_id)
         self._exec_seq = itertools.count(1)
         self._req_seq = itertools.count(1)
 
@@ -168,6 +171,20 @@ class MockEventApi:
             if isinstance(override, int):
                 return self._error(override, "unavailable" if override >= 500 else "rejected", "forced override", request)
             return self._json(202, override, request)  # raw (possibly malformed) admission
+        # Caller-scoped retry-safe admission (contract 1.7.1): same key + identical
+        # request returns the stored receipt; same key + different payload -> 409.
+        idem_key = request.headers.get("idempotency-key")
+        fingerprint = hashlib.sha256(
+            json.dumps({"action_id": action_id, "request": body}, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if idem_key and (claim := self._idempotency.get(idem_key)):
+            if claim[0] != fingerprint:
+                return self._error(
+                    409, "conflict", "Idempotency-Key was already used with a different payload", request
+                )
+            stored = self.executions.get(claim[1])
+            if stored is not None:
+                return self._json(202, self._public(stored), request)
         execution_id = f"exec_{next(self._exec_seq)}"
         record = {
             "id": execution_id,
@@ -184,6 +201,13 @@ class MockEventApi:
             "_polls": list(self._pending.get(action_id, ["running"])),
         }
         self.executions[execution_id] = record
+        if idem_key:
+            self._idempotency[idem_key] = (fingerprint, execution_id)
+        if self.drop_execute_responses > 0:
+            # Admission committed server-side, response lost on the wire — the
+            # ambiguous-submission case keyed retries exist for.
+            self.drop_execute_responses -= 1
+            return self._error(503, "unavailable", "response lost after admission", request)
         return self._json(202, self._public(record), request)
 
     def _poll(self, execution_id: str, request: httpx.Request) -> httpx.Response:

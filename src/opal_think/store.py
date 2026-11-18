@@ -219,6 +219,27 @@ class ThinkStore:
             )
         return step
 
+    def update_action_step(self, task_id: str, execution_id: str, **changes) -> dict[str, Any] | None:
+        """Update the most recent action step carrying ``execution_id`` — the durable
+        EVENT receipt written at submit time and completed once the terminal
+        execution record arrives. One action call remains one step record."""
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT steps FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            steps = json.loads(row["steps"]) if row and row["steps"] else []
+            target = next(
+                (
+                    s
+                    for s in reversed(steps)
+                    if s.get("kind") == "action" and s.get("execution_id") == execution_id
+                ),
+                None,
+            )
+            if target is None:
+                return None
+            target.update(changes)
+            conn.execute("UPDATE tasks SET steps = ? WHERE id = ?", (json.dumps(steps), task_id))
+            return target
+
     def list_tasks(
         self,
         limit: int,
@@ -300,7 +321,10 @@ class ThinkStore:
                 execution_ids = [s.get("execution_id") for s in steps if s.get("execution_id")]
                 if execution_ids:
                     task_error["event_execution_id"] = execution_ids[-1]
-                    task_error["message"] += "; a downstream EVENT execution was admitted and is not rolled back"
+                    task_error["message"] += (
+                        "; a downstream EVENT execution was admitted and is not rolled back"
+                        f" (execution {execution_ids[-1]})"
+                    )
                 conn.execute(
                     "UPDATE tasks SET status = 'failed', error = ?, finished_at = ? WHERE id = ?",
                     (json.dumps(task_error), now, row["id"]),

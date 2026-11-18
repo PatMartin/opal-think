@@ -38,12 +38,21 @@ def _sse_frame(frame: dict[str, Any]) -> str:
     return f"event: {frame['type']}\ndata: {json.dumps(frame, default=str)}\n\n"
 
 
+def _wire_error(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Contract ``TaskFailure`` is {code, message} only; durable extras (e.g.
+    ``event_execution_id``) stay in the store and on the action step."""
+    error = row.get("error")
+    if error is None:
+        return None
+    return {"code": error.get("code"), "message": error.get("message")}
+
+
 def _snapshot_frame(row: dict[str, Any]) -> dict[str, Any]:
     data: dict[str, Any] = {"status": row["status"]}
     if row.get("answer") is not None:
         data["answer"] = row["answer"]
-    if row.get("error") is not None:
-        data["error"] = row["error"]
+    if (error := _wire_error(row)) is not None:
+        data["error"] = error
     return {
         "task_id": row["id"],
         "timestamp": row["finished_at"] or row["created_at"],
@@ -65,7 +74,7 @@ def _to_task(row: dict[str, Any]) -> Task:
         steps_completed=row["steps_completed"],
         cancel_requested=bool(row["cancel_requested"]),
         answer=row["answer"],
-        error=row.get("error"),
+        error=_wire_error(row),
         steps=row.get("steps") or [],
         created_at=row["created_at"],
         started_at=row["started_at"],

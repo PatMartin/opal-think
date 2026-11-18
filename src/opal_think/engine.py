@@ -27,6 +27,7 @@ from opal_think.event_client import (
     normalize_execution_result,
     sanitize_action_input,
 )
+from opal_think.opal_context import is_valid_opal_id
 from opal_think.providers import (
     CapabilityUnsupported,
     DiscoveredModel,
@@ -369,6 +370,9 @@ class TaskEngine:
             "session_id": row.get("opal_session_id"),
             "transaction_id": row.get("opal_transaction_id"),
             "causation_id": task_id,
+            # Agreed chain identity + depth: the action is a derived hop below the
+            # task; EVENT bounds chains via security.max_chain_depth.
+            "chain_depth": str((row.get("causation_depth") or 0) + 1),
         }
         event_client = self._event_client()
         # Action permission is explicit: only ids in the configured allowlist may
@@ -585,17 +589,52 @@ class TaskEngine:
             except jsonschema.SchemaError:
                 pass  # malformed catalog schema -> let EVENT arbitrate
         action_input = sanitize_action_input({"event": event})
+        # Stable caller-scoped submission key (EVENT >=1.7 retry-safe contract): a
+        # retry of THIS logical call with the identical payload returns the stored
+        # receipt, so an ambiguous submission never becomes a second execution.
+        submission_key = self._submission_key(task_id, call)
         # NOTE: submitting to EVENT is a real side effect. Cancelling THINK afterwards
         # does not undo it — EVENT may keep running the execution we already admitted.
-        try:
-            execution = await self._with_deadline(
-                task_id, event_client.execute(action_id, event, context), self._remaining(task_id, deadline)
-            )
-        except OpalHTTPException as exc:
-            if exc.status_code >= 500:
+        for attempt in range(2):
+            try:
+                execution = await self._with_deadline(
+                    task_id,
+                    event_client.execute(action_id, event, context, submission_key),
+                    self._remaining(task_id, deadline),
+                )
+                break
+            except OpalHTTPException as exc:
+                if exc.status_code < 500:
+                    # Definitive rejection (validation/auth/scope) — feed back to the model.
+                    self._action_step(
+                        task_id, action_id, None, action_input, "failed", f"EVENT rejected request: {exc.code}"
+                    )
+                    return json.dumps({"status": "error", "error": "event_rejected", "detail": exc.message[:500]})
+                if attempt == 0:
+                    # Ambiguous: the admission may have landed but the response was
+                    # lost. Exactly one retry — safe on EVENT>=1.7 (keyed dedup);
+                    # on older versions at most one duplicate, never a retry loop.
+                    telemetry["event_submit_retries"] = telemetry.get("event_submit_retries", 0) + 1
+                    continue
+                self._action_step(
+                    task_id, action_id, None, action_input, "failed",
+                    "EVENT unreachable during submission; admission status unknown",
+                )
                 raise
-            self._action_step(task_id, action_id, None, action_input, "failed", f"EVENT rejected request: {exc.code}")
-            return json.dumps({"status": "error", "error": "event_rejected", "detail": exc.message[:500]})
+            except _TaskCancelled:
+                # Interruption before receipt: nothing was observed; the durable
+                # record marks the admission status as unknown rather than lost.
+                self._action_step(
+                    task_id, action_id, None, action_input, "cancelled",
+                    "cancelled during EVENT submission; admission status unknown",
+                )
+                raise
+            except _TaskTimeout:
+                self._action_step(
+                    task_id, action_id, None, action_input, "timed_out",
+                    "task deadline during EVENT submission; admission status unknown",
+                )
+                raise
         execution_id = execution.get("id") if isinstance(execution, dict) else None
         if not execution_id:
             # Contract violation: the 202 admission carries no execution id, so there
@@ -604,26 +643,51 @@ class TaskEngine:
                 task_id, action_id, None, action_input, "failed", "EVENT admission record missing execution id"
             )
             return json.dumps({"status": "error", "error": "event_protocol_error"})
+        # Durable receipt FIRST: execution_id + submitted state persist to the task
+        # record before any progress event or poll, so no interruption (cancel,
+        # timeout, crash) can lose the downstream admission.
+        self._action_step(task_id, action_id, execution_id, action_input, "started", "action submitted to EVENT")
         self._emit(task_id, "task.action", {"action_id": action_id, "execution_id": execution_id, "summary": "action submitted"})
         while True:
-            if self._cancels[task_id].is_set():
-                raise _TaskCancelled
-            remaining = self._remaining(task_id, deadline)
-            record = await self._with_deadline(task_id, event_client.get_execution(execution_id, context), remaining)
+            try:
+                if self._cancels[task_id].is_set():
+                    raise _TaskCancelled
+                remaining = self._remaining(task_id, deadline)
+                record = await self._with_deadline(task_id, event_client.get_execution(execution_id, context), remaining)
+            except _TaskCancelled:
+                # Cancellation after receipt: the receipt is kept; EVENT-side work is
+                # explicitly not cancelled (no such contract operation exists).
+                self._update_action_step(
+                    task_id, execution_id, status="cancelled",
+                    summary="cancelled while polling; EVENT execution is not cancelled",
+                )
+                raise
+            except _TaskTimeout:
+                self._update_action_step(
+                    task_id, execution_id, status="timed_out",
+                    summary="task deadline exceeded while polling; EVENT execution may still run",
+                )
+                raise
+            except OpalHTTPException as exc:
+                self._update_action_step(
+                    task_id, execution_id, status="failed",
+                    summary=f"polling interrupted ({exc.code}); EVENT execution may still be running",
+                )
+                raise
             status = record.get("status") if isinstance(record, dict) else None
             if status in TERMINAL_EXECUTION_STATUSES:
                 break
             if status not in ACTIVE_EXECUTION_STATUSES:
                 # Unrecognized status is an EVENT contract violation: fail the step
                 # instead of polling until the task deadline or fabricating success.
-                self._action_step(
-                    task_id, action_id, execution_id, action_input, "failed",
-                    f"EVENT returned unrecognized execution status: {status!r}",
+                self._update_action_step(
+                    task_id, execution_id, status="failed",
+                    summary=f"EVENT returned unrecognized execution status: {status!r}",
                 )
                 return json.dumps({"status": "error", "error": "event_protocol_error"})
             await asyncio.sleep(min(0.5, self._remaining(task_id, deadline)))
         summary = f"action {action_id} {status}"
-        self._action_step(task_id, action_id, execution_id, action_input, status, summary)
+        self._update_action_step(task_id, execution_id, status=status, summary=summary)
         return json.dumps(normalize_execution_result(record), default=str)
 
     def _action_step(self, task_id, action_id, execution_id, action_input, status, summary) -> None:
@@ -639,6 +703,23 @@ class TaskEngine:
                 "at": _now(),
             },
         )
+
+    def _update_action_step(self, task_id: str, execution_id: str, *, status: str, summary: str) -> None:
+        """Update the durable receipt for an admitted execution in place."""
+        self._store.update_action_step(task_id, execution_id, status=status, summary=summary)
+        self._emit(
+            task_id, "task.progress",
+            {"summary": summary, "kind": "action", "execution_id": execution_id, "status": status},
+        )
+
+    @staticmethod
+    def _submission_key(task_id: str, call) -> str:
+        """Caller-scoped retry key: one logical tool call = one key (task + call
+        identity), so retries dedupe server-side against the stored receipt."""
+        raw = f"{task_id}:{call.call_id or 'call'}"
+        if is_valid_opal_id(raw):
+            return raw
+        return f"{task_id}:{hashlib.sha256(raw.encode()).hexdigest()[:32]}"
 
     async def _collect_stream(self, task_id: str, adapter: ProviderAdapter, model_name: str, messages: list) -> str:
         stripper = ThinkStripper()
