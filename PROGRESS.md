@@ -55,3 +55,56 @@ unavailable figures are marked NOT RUN/UNKNOWN.
 | 16 | opal-think | (pending) | main | 2026-11-08 | `pytest -q` → 305/0/18 (live/env-gated skips); focused 25 persona+info contract/CLI | ruff PASS | Contract v1.5.0→v1.6.0 + kernel 1.2.0→1.6.0 vendored byte-identical; plural→singular path renames across REST/CLI/SPA/tests (hard cutover — surface test asserts 27 ops exact); new persona family (SQLite personas table sharing settings `meta.revision` `"s<n>"`, If-Match 428/422/412, 409 dup, OpalValidationReport); new info/info_ping; EVENT adapter → singular action/execution paths; SPA personas view |
 
 | 17 | opal-think | 8810383 | main | 2026-11-10 | `pytest -q` → 334/0/31 (env-gated skips); `OPAL_THINK_BROWSER=1 pytest tests/browser` → 16/0/0 (real chromium) | ruff PASS | Contract v1.6.0→v1.7.1 + kernel 1.7.1: new /profile/ (think-owned suite registry, opaque foreign compartments, `settings` preset applied atomically on activate), /backup/ (OpalConfigExport bundle, tar.gz archives, atomic If-Match import/restore, empty body = self round-trip), /service/ (ServiceProcessManager ported from opal-event: pidfile child, restart-self via WAIT_FOR_PID); CLI restructured to contract tree (`config {setting,persona,profile}`, `backup`, `info live|ready`, REST-first `service` — no back-compat aliases); SPA gains profiles/backup/service views |
+
+## Round 2 — action permissions, replay, receipts, personas, watcher terminal state
+
+Review base: `3661dcb`. Sibling `../opal-event` checkout: `d483762` on
+`proposal/event-self-describing-actions` lineage, contract `opal_event_v1.7.1.yaml`
+(runtime 1.7.1). EVENT execute-scoped token surface (auth.py): `GET /api/v1/action/`,
+`GET /api/v1/action/{id}`, `GET /api/v1/topic/`, `POST /api/v1/action/{id}/execute`,
+`GET /api/v1/execution/`, `GET /api/v1/execution/{id}` — fail-closed, no admin.
+Named `ScopedPrincipal`s can narrow execute to an `actions` allowlist and
+`own_receipts_only` (execution reads limited to receipts the principal admitted;
+`owner` recorded at execute). Execute accepts `Idempotency-Key` (scoped to
+action+caller): same key+payload fingerprint returns the stored receipt, different
+payload is 409 — retry-safe admission. `X-Opal-Chain-Depth` declares hop depth,
+`>= security.max_chain_depth` (default 16) is refused 422.
+
+Traced flow (opal-think @ e544df6):
+- **Admission** `routers/tasks.py::create_task`: session 404 -> causation-depth bound ->
+  `engine.resolve_model` (provider I/O) -> `engine.admit` (one locked txn: idempotency
+  lookup+body-hash compare, session-busy 409, ceiling 429, insert + key record).
+- **Model resolution** `engine.resolve_model`: explicit `model_id` -> `adapter_for` +
+  `show_model` (503 unreachable / 422 unknown); default -> `catalog()` + bounded
+  `/api/show` scan preferring verified generative (+tool-capable when EVENT set).
+- **Tool selection** `engine._execute`: `list_actions` -> `allowed` = **every** enabled
+  action id (any enabled action invocable); `_select_tools` only bounds which specs are
+  *advertised* (16 specs / 8 KiB) — selection is not a permission boundary.
+- **EVENT submission** `_run_action`: name check vs `allowed`, client-side
+  `input_schema` validation, `execute` then poll `get_execution` (0.5 s) to terminal;
+  the execution_id is recorded ONLY in the post-poll action step — nothing durable
+  between submit and terminal receipt.
+- **Storage** `ThinkStore`: `tasks`, `idempotency`, `sessions` tables; step log JSON on
+  the task row; `fail_active_tasks` reaps orphans at startup (surfaces last
+  `execution_id` in the error).
+- **Cancellation** `request_cancel` -> `flag_cancel` (non-terminal rows only) + asyncio
+  Event; runner is single writer of terminal state. EVENT-side executions already
+  admitted are NOT cancelled (documented limitation).
+- **SSE** `subscribe`/`_emit`: per-watcher `asyncio.Queue(maxsize=512)`; `put_nowait`
+  drops on QueueFull — terminal frame AND the `None` close sentinel can both be
+  dropped, so a saturated watcher may never observe terminal state (step 6 target).
+
+Baseline failure reproduction: same-key replay with the provider down -> **503**
+(`resolve_model` precedes `admit`, so replay needs a live catalog). Verified at
+e544df6: POST + `Idempotency-Key: k-1` admitted `task_75d2…`, `providers.fake.enabled`
+flipped false, identical POST -> 503 `unavailable` instead of 202 replay.
+
+Contract gaps found while tracing (for later steps): `TaskCreate` has no `persona_id`
+field; `OpalPersona*` kernel schemas carry `persona_id/name/description/voice_id/
+enabled/origin` only — no model/instructions/generation fields. Step 5 needs a
+contract amendment. `x-opal-event-integration` note still says scoped permissions are
+"proposed, not implemented in EVENT 1.4.0" — stale vs EVENT 1.7.1 (step 7 target).
+
+| Step | Repo | SHA | Branch | Date | Tests (cmd → passed/failed/skipped) | Lint | Notes |
+|---|---|---|---|---|---|---|---|
+| r2-01 | opal-think | e544df6 | main | 2026-11-17 | `pytest -q` → 357/0/33 (env-gated live/browser); focused `test_tasks + test_task_stream_cancel + test_task_deadline + test_event_client + test_event_integration + test_event_http_boundary + test_personas` → 77/0/0 | ruff PASS | Baseline recorded (trace + EVENT token scope above). Pre-existing uncommitted `cli/main.py`+`test_cli_tree.py` tree-render refactor left untouched. Idempotency replay failure REPRODUCES (503 on provider-down replay). EVENT 1.7.1 @ d483762 verified. Live EVENT/Ollama NOT RUN (env-gated) |
