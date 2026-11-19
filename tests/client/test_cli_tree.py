@@ -29,7 +29,7 @@ def test_tree_ascii_variant() -> None:
 def test_tree_covers_commands_and_arguments() -> None:
     out = runner.invoke(think_app, ["tree"]).output
     for command in (
-        "ask", "backup", "chat", "config", "gui", "info", "model", "service", "session", "task", "tree",
+        "ask", "chat", "config", "gui", "info", "model", "service", "session", "task", "tree",
     ):
         assert f" {command}" in f"\n{out}"
     assert "prompt" in out  # required argument, unbracketed

@@ -265,54 +265,81 @@ class ServiceLogTail(BaseModel):
     lines: list[str] = Field(default_factory=list)
 
 
-# -- backup / portable configuration (kernel ``backup_*`` path items) ------------------------------------
+# -- configuration snapshots (kernel ``config_*`` path items, v0.1.0) ------------------------------------
+
+SNAPSHOT_FORMAT_VERSION = "1.0.0"
+SNAPSHOT_MODULE = "opal-think"
+SNAPSHOT_RESOURCE_SECTIONS = ("profiles", "personas", "models", "engines")
 
 
-class ConfigExport(BaseModel):
-    """Kernel ``OpalConfigExport`` request shape. ``settings`` is the flat
-    key→value portable settings map; ``personas``/``profiles`` are this service's
-    portable collections; foreign sections are accepted (warned, ignored on import)."""
+class OpalValidationIssue(BaseModel):
+    """Kernel ``OpalValidationIssue``."""
 
     model_config = ConfigDict(extra="allow")
 
-    format_version: str | int
-    exported_at: str | None = None
-    settings: dict[str, Any]
-    personas: list[dict[str, Any]] = Field(default_factory=list)
-    profiles: list[dict[str, Any]] = Field(default_factory=list)
+    code: str
+    path: str
+    message: str
 
 
-class ImportResult(BaseModel):
-    """Kernel ``OpalImportResult``: outcome fields are service-defined."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    success: bool = True
-    status: Literal["imported"] = "imported"
-    revision: str | None = None  # resulting configuration ETag for subsequent If-Match writes
-    counts: dict[str, int] = Field(default_factory=dict)
-    warnings: list[str] = Field(default_factory=list)
-    pending_restart: bool = False
-    message: str | None = None
-
-
-class BackupInfo(BaseModel):
-    """Kernel ``OpalBackupInfo``."""
+class ConfigSnapshot(BaseModel):
+    """Kernel ``OpalConfigSnapshot``: closed envelope carrying flat setting-key
+    overrides plus declared declarative-resource sections."""
 
     model_config = ConfigDict(extra="forbid")
 
-    filename: str
-    size_bytes: int = Field(ge=0)
+    format_version: str = SNAPSHOT_FORMAT_VERSION
+    module: str = SNAPSHOT_MODULE
     created_at: datetime
+    settings: dict[str, Any] = Field(default_factory=dict)
+    resources: dict[str, Any] = Field(default_factory=dict)
 
 
-class BackupCreateResponse(BaseModel):
-    """Kernel ``OpalBackupCreateResponse``."""
+class ConfigSaveRequest(BaseModel):
+    """Kernel ``OpalConfigSaveRequest``."""
 
     model_config = ConfigDict(extra="forbid")
 
-    filename: str
-    message: str | None = None
+    destination: Literal["managed", "response"] = "managed"
+
+
+class ConfigSaveResult(BaseModel):
+    """Kernel ``OpalConfigSaveResult``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot: ConfigSnapshot
+    managed: bool
+
+
+class ConfigLoadRequest(BaseModel):
+    """Kernel ``OpalConfigLoadRequest``. ``snapshot`` is typed loosely so an
+    explicit ``null`` can be reported as a structured 422 rather than a schema
+    rejection; omit (or send ``{}``) to load the managed snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot: dict[str, Any] | None = None
+
+
+class ConfigLoadResult(BaseModel):
+    """Kernel ``OpalConfigLoadResult``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    applied: Literal[True] = True
+    pending_restart_fields: list[str] = Field(default_factory=list)
+    warnings: list[OpalValidationIssue] = Field(default_factory=list)
+
+
+class ConfigValidation(BaseModel):
+    """Kernel ``OpalConfigValidation``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    valid: bool
+    errors: list[OpalValidationIssue] = Field(default_factory=list)
+    warnings: list[OpalValidationIssue] = Field(default_factory=list)
 
 
 # -- personas (v1.7.1; shared OPAL persona identifiers introduced by OPAL Say) ----------------------------

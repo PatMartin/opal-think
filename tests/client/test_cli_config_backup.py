@@ -1,6 +1,8 @@
-"""CLI ``config profile`` / ``backup`` / ``config setting update`` over the mock bridge."""
+"""CLI ``config profile`` / ``config setting`` / ``config save|load|validate`` over the mock bridge."""
 
 from __future__ import annotations
+
+import json
 
 import httpx
 import pytest
@@ -63,24 +65,25 @@ def test_setting_set(api) -> None:
     assert api.get("/api/v1/setting/task.retention_days").json()["value"] == 10
 
 
-def test_backup_export_and_validate(api) -> None:
-    result = runner.invoke(cli_main.think_app, ["backup", "export"])
+def test_config_save_and_validate(api, tmp_path) -> None:
+    snap_file = tmp_path / "snap.json"
+    result = runner.invoke(cli_main.think_app, ["config", "save", "--out", str(snap_file)])
     assert result.exit_code == 0, result.output
-    result = runner.invoke(
-        cli_main.think_app, ["backup", "validate", "--json", '{"format_version": "1.0.0", "settings": {}}']
-    )
+    snap = __import__("json").loads(snap_file.read_text())
+    assert snap["module"] == "opal-think" and snap["format_version"] == "1.0.0"
+    result = runner.invoke(cli_main.think_app, ["config", "validate", "--in", str(snap_file)])
     assert result.exit_code == 0, result.output
-    result = runner.invoke(
-        cli_main.think_app, ["backup", "validate", "--json", '{"format_version": "1.0.0", "settings": {"bad.k": 1}}']
-    )
+    bad = tmp_path / "bad.json"
+    bad.write_text(__import__("json").dump if False else __import__("json").dumps({**snap, "settings": {"bad.k": 1}}))
+    result = runner.invoke(cli_main.think_app, ["config", "validate", "--in", str(bad)])
     assert result.exit_code != 0
 
 
-def test_backup_archive_cycle(api) -> None:
-    assert runner.invoke(cli_main.think_app, ["backup", "list"]).exit_code == 0
-    result = runner.invoke(cli_main.think_app, ["backup", "create"])
+def test_config_managed_round_trip(api) -> None:
+    result = runner.invoke(cli_main.think_app, ["config", "save"])
     assert result.exit_code == 0, result.output
-    filename = api.get("/api/v1/backup/list").json()[0]["filename"]
-    assert runner.invoke(cli_main.think_app, ["backup", "restore", filename]).exit_code == 0
-    assert runner.invoke(cli_main.think_app, ["backup", "remove", filename]).exit_code == 0
-    assert api.get("/api/v1/backup/list").json() == []
+    assert api.get("/api/v1/setting/task.retention_days").json()["is_default"] is True
+    runner.invoke(cli_main.think_app, ["config", "setting", "set", "task.retention_days", "10"])
+    result = runner.invoke(cli_main.think_app, ["config", "load"])
+    assert result.exit_code == 0, result.output
+    assert api.get("/api/v1/setting/task.retention_days").json()["is_default"] is True

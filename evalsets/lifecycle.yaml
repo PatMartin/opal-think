@@ -52,5 +52,5 @@ cases:
       event_calls: 2
       called_actions: [gpu_diagnostics, announce_person]
       steps:
-        - {kind: action, status: succeeded, action_id: gpu_diagnostics}
-        - {kind: action, status: succeeded, action_id: announce_person}
+        - {kind: action, status: completed, action_id: gpu_diagnostics}
+        - {kind: action, status: completed, action_id: announce_person}

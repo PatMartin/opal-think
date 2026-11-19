@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+import yaml
 from rich.console import Console
 from rich.text import Text
 from rich.tree import Tree
@@ -37,7 +38,6 @@ tasks_app = typer.Typer(
     "cancel requests cooperative cancellation. `ask` and `chat` are shortcuts over this same lifecycle.",
     no_args_is_help=True)
 info_app = typer.Typer(help="Service health probe.", no_args_is_help=True)
-backup_app = typer.Typer(help="Portable configuration export, archives and restore.", no_args_is_help=True)
 service_app = typer.Typer(help="Managed opal-think-svc process lifecycle.", no_args_is_help=True)
 # Canonical x-opal-cli bindings (v1.7.1): `config` parents the portable-configuration
 # groups — setting, persona, profile.
@@ -53,7 +53,6 @@ think_app.add_typer(models_app, name="model")
 think_app.add_typer(tasks_app, name="task")
 think_app.add_typer(info_app, name="info")
 think_app.add_typer(config_app, name="config")
-think_app.add_typer(backup_app, name="backup")
 think_app.add_typer(service_app, name="service")
 
 _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
@@ -737,114 +736,61 @@ def chat(
             typer.echo(f"turn failed: {exc}", err=True)
 
 
-# -- `opal think backup` ---------------------------------------------------------------------------
+# -- `opal think config` (kernel config save|load|validate) -----------------------------------------------
 
 
-def _backup_etag(ctx: typer.Context) -> str:
-    """Shared portable-configuration revision for backup import/restore."""
-    return _call(ctx, "GET", "/api/v1/setting/").headers["ETag"]
-
-
-def _read_json_payload(json_str: str | None, file: str | None) -> dict[str, Any]:
-    """JSON request body from ``--json``, ``--file``, or stdin (in that priority order)."""
-    if json_str is not None:
-        text = json_str
-    elif file is not None:
-        text = Path(file).read_text(encoding="utf-8")
-    elif not sys.stdin.isatty():
-        text = sys.stdin.read()
-    else:
-        raise typer.BadParameter("provide --json, --file, or pipe JSON on stdin")
+def _read_snapshot_file(path: str) -> dict[str, Any]:
+    """Read a local YAML or JSON snapshot file (kernel ``yaml_or_json_file`` binding)."""
     try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise typer.BadParameter(f"invalid JSON: {exc}") from None
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        typer.echo(f"error: cannot read snapshot file {path}: {exc}", err=True)
+        raise typer.Exit(2) from None
+    if not isinstance(data, dict):
+        typer.echo(f"error: snapshot file {path} is not a mapping", err=True)
+        raise typer.Exit(2)
+    return data
 
 
-@backup_app.command("list")
-def backup_list(ctx: typer.Context) -> None:
-    """List service-managed backup archives."""
-    data = _call(ctx, "GET", "/api/v1/backup/list").json()
-    if _state(ctx).json_output:
-        _emit(ctx, data)
-        return
-    for b in data:
-        typer.echo(f"{b['filename']}  {b['size_bytes']} bytes  {b['created_at']}")
-
-
-@backup_app.command("create")
-def backup_create(ctx: typer.Context) -> None:
-    """Write a timestamped archive of the current portable configuration."""
-    _emit(ctx, _call(ctx, "POST", "/api/v1/backup/create").json())
-
-
-@backup_app.command("download")
-def backup_download(
+@config_app.command("save")
+def config_save(
     ctx: typer.Context,
-    filename: str,
-    out: str = typer.Option(None, "--out", "-o", help="Write the archive to this path instead of stdout"),
+    out: str = typer.Option(None, "--out", help="Write the snapshot to FILE instead of the managed store"),
 ) -> None:
-    """Download one service-managed backup archive."""
-    data = _call(ctx, "GET", f"/api/v1/backup/download/{filename}").content
-    if out:
-        Path(out).write_bytes(data)
-        typer.echo(f"{out} written ({len(data)} bytes)")
+    """Capture the persistent configuration as a portable snapshot."""
+    if out is None:
+        data = _call(ctx, "POST", "/api/v1/config/save", json={"destination": "managed"}).json()
+        typer.echo("managed snapshot saved", err=True)
+        _emit(ctx, data["snapshot"])
     else:
-        sys.stdout.buffer.write(data)
+        data = _call(ctx, "POST", "/api/v1/config/save", json={"destination": "response"}).json()
+        Path(out).write_text(json.dumps(data["snapshot"], indent=2), encoding="utf-8")
+        typer.echo(f"snapshot written to {out}", err=True)
 
 
-@backup_app.command("restore")
-def backup_restore(
+@config_app.command("load")
+def config_load_cmd(
     ctx: typer.Context,
-    filename: str,
+    in_file: str = typer.Option(None, "--in", help="YAML or JSON snapshot file (omit to load the managed snapshot)"),
     if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
 ) -> None:
-    """Atomically restore a named archive (auto-fetches the config ETag)."""
-    etag = if_match or _backup_etag(ctx)
-    _emit(ctx, _call(ctx, "POST", f"/api/v1/backup/restore/{filename}", headers={"If-Match": etag}).json())
+    """Atomically replace the persistent portable configuration with a snapshot."""
+    body = {"snapshot": _read_snapshot_file(in_file)} if in_file else {}
+    etag = if_match or _call(ctx, "GET", "/api/v1/setting/").headers["ETag"]
+    _emit(ctx, _call(ctx, "POST", "/api/v1/config/load", json=body, headers={"If-Match": etag}).json())
 
 
-@backup_app.command("remove")
-def backup_remove(ctx: typer.Context, filename: str) -> None:
-    """Delete a named backup archive."""
-    _call(ctx, "DELETE", f"/api/v1/backup/{filename}")
-    typer.echo(f"{filename}: removed")
-
-
-@backup_app.command("export")
-def backup_export(ctx: typer.Context) -> None:
-    """Export the portable configuration bundle (settings, personas, profiles)."""
-    _emit(ctx, _call(ctx, "GET", "/api/v1/backup/export").json())
-
-
-@backup_app.command("validate")
-def backup_validate(
+@config_app.command("validate")
+def config_validate_cmd(
     ctx: typer.Context,
-    json_str: str = typer.Option(None, "--json", help="Bundle as a JSON string"),
-    file: str = typer.Option(None, "--file", "-f", help="Bundle from a JSON file"),
+    in_file: str = typer.Option(None, "--in", help="YAML or JSON snapshot file (omit to validate live configuration)"),
 ) -> None:
-    """Validate a configuration bundle without applying it."""
-    data = _call(ctx, "POST", "/api/v1/backup/validate", json=_read_json_payload(json_str, file)).json()
+    """Validate a candidate snapshot, or the live configuration, without side effects."""
+    body = {"snapshot": _read_snapshot_file(in_file)} if in_file else {}
+    data = _call(ctx, "POST", "/api/v1/config/validate", json=body).json()
     _emit(ctx, data)
-    if not data.get("valid"):
+    if not data["valid"]:
         raise typer.Exit(1)
-
-
-@backup_app.command("import")
-def backup_import(
-    ctx: typer.Context,
-    json_str: str = typer.Option(None, "--json", help="Bundle as a JSON string"),
-    file: str = typer.Option(None, "--file", "-f", help="Bundle from a JSON file"),
-    no_body: bool = typer.Option(False, "--no-body", help="Re-apply the persisted configuration (self round-trip)"),
-    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
-) -> None:
-    """Atomically import a portable configuration bundle (auto-fetches the config ETag)."""
-    etag = if_match or _backup_etag(ctx)
-    body = None if no_body else _read_json_payload(json_str, file)
-    kwargs: dict[str, Any] = {"headers": {"If-Match": etag}}
-    if body is not None:
-        kwargs["json"] = body
-    _emit(ctx, _call(ctx, "POST", "/api/v1/backup/import", **kwargs).json())
 
 
 # -- `opal think service` ------------------------------------------------------------------------

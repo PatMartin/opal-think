@@ -236,21 +236,20 @@ def test_profile_lifecycle(page) -> None:
     assert row.count() == 1 and "active" in row.inner_text()
 
 
-def test_backup_lifecycle(page) -> None:
-    """Backup view: create archive -> row appears, export renders bundle, remove."""
-    _view(page, "backup")
-    page.click("#backup-create")
-    row = page.locator("#backups-table tbody tr", has_text="opal-think-")
-    row.wait_for(timeout=15000)
-    page.click("#backup-export")
+def test_config_view(page) -> None:
+    """Config view: save managed snapshot -> toast, validate renders the report."""
+    _view(page, "config")
+    page.click("#config-validate")
     page.wait_for_function(
-        "() => document.getElementById('backup-detail').innerText.includes('format_version')",
+        "() => document.getElementById('config-detail').innerText.includes('valid')",
         timeout=15000,
     )
-    with _dialogs(page, ""):  # confirm() -> delete archive
-        row.locator("button", has_text="Remove").click()
-        page.wait_for_timeout(2000)
-    assert page.locator("#backups-table tbody tr", has_text="opal-think-").count() == 0
+    page.click("#config-save")
+    page.wait_for_function(
+        "() => document.getElementById('toast') && document.getElementById('toast').innerText.includes('snapshot')",
+        timeout=15000,
+    )
+
 
 
 def test_service_view_renders(page) -> None:

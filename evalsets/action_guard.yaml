@@ -22,7 +22,7 @@ cases:
     model_id: fake:script
     actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
     action_results:
-      gpu_diagnostics: {status: succeeded, result: {gpu_temp_c: 63}}
+      gpu_diagnostics: {status: completed, result: {gpu_temp_c: 63}}
     script:
       - tool_calls: [{action_id: gpu_diagnostics, event: {topic: gpu.diag, data: {level: 1}}}]
       - text: "GPU temperature is 63C"
@@ -33,7 +33,7 @@ cases:
       called_actions: [gpu_diagnostics]
       steps:
         - kind: action
-          status: succeeded
+          status: completed
           action_id: gpu_diagnostics
           action_input: {event: {topic: gpu.diag, data: {level: 1}}}
   - id: execution-failed

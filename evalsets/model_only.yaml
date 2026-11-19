@@ -8,4 +8,4 @@ cases:
       answer_contains: "echo: ping pong"
       event_calls: 0
       steps:
-        - {kind: reasoning, status: succeeded}
+        - {kind: reasoning, status: completed}

@@ -647,7 +647,7 @@ class SettingsStore:
 
         return self._checked_write(write, expect_global=expect_global)
 
-    # -- wholesale portable-config replace (backup import/restore, v1.7.1) --------------------------------
+    # -- wholesale portable-config replace (config load, v0.1.0) --------------------------------
 
     def replace_portable_config_checked(
         self,

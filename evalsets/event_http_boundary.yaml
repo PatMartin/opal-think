@@ -12,7 +12,7 @@ cases:
     event_backend: mock_http_event
     actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
     action_results:
-      gpu_diagnostics: {status: succeeded, exit_code: 0, stdout: "GPU0 temp=63C", stderr: "", result: {gpu_temp_c: 63}}
+      gpu_diagnostics: {status: completed, exit_code: 0, stdout: "GPU0 temp=63C", stderr: "", result: {gpu_temp_c: 63}}
     script:
       - tool_calls: [{action_id: gpu_diagnostics, event: {topic: gpu.diag, data: {}}}]
       - text: "GPU is 63C"
@@ -21,9 +21,9 @@ cases:
       event_provenance: mock_http_event
       event_calls: 1
       called_actions: [gpu_diagnostics]
-      tool_result_contains: ["GPU0 temp=63C", "succeeded", "gpu_temp_c"]
+      tool_result_contains: ["GPU0 temp=63C", "completed", "gpu_temp_c"]
       steps:
-        - {kind: action, status: succeeded, action_id: gpu_diagnostics}
+        - {kind: action, status: completed, action_id: gpu_diagnostics}
   - id: http-server-side-rejection
     prompt: "act on a malformed envelope"
     event_backend: mock_http_event

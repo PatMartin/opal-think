@@ -7,16 +7,16 @@ cases:
     prompt: "read the gpu log"
     actions: [{id: gpu_diagnostics, enabled: true, type: shell}]
     action_results:
-      gpu_diagnostics: {status: succeeded, exit_code: 0, stdout: "GPU0 temp=63C", stderr: ""}
+      gpu_diagnostics: {status: completed, exit_code: 0, stdout: "GPU0 temp=63C", stderr: ""}
     script:
       - tool_calls: [{action_id: gpu_diagnostics, event: {topic: gpu.diag, data: {}}}]
       - text: "GPU is 63C"
     expect:
       status: completed
       event_calls: 1
-      tool_result_contains: ["GPU0 temp=63C", "succeeded"]
+      tool_result_contains: ["GPU0 temp=63C", "completed"]
       steps:
-        - {kind: action, status: succeeded, action_id: gpu_diagnostics}
+        - {kind: action, status: completed, action_id: gpu_diagnostics}
   - id: event-rejects-args
     prompt: "call with bad args"
     actions: [{id: fragile, enabled: true, type: http}]
