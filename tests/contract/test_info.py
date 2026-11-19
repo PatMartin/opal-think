@@ -13,7 +13,7 @@ def test_info(client: TestClient) -> None:
     body = response.json()
     assert body["name"] == "opal-think-svc"
     assert body["version"] == __version__
-    assert body["api_version"] == API_VERSION == "1.7.1"
+    assert body["api_version"] == API_VERSION == "0.1.0"
 
 
 def test_info_ping(client: TestClient) -> None:

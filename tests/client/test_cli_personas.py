@@ -41,7 +41,7 @@ def test_version(api) -> None:
     result = runner.invoke(cli_main.think_app, ["info", "version"])
     assert result.exit_code == 0, result.output
     body = json.loads(result.output)
-    assert body["name"] == "opal-think-svc" and body["api_version"] == "1.7.1"
+    assert body["name"] == "opal-think-svc" and body["api_version"] == "0.1.0"
 
 
 def test_ping(api) -> None:

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: OPAL Think API
-  version: 1.7.1
+  version: '0.1.0'
   description: |
     OPAL-THINK is a model-neutral, guarded reasoning service. The OpenAPI contract is authoritative; CLI and SPA only call REST.
 
@@ -16,7 +16,7 @@ info:
     - Tools are invoked only through EVENT. THINK must never execute arbitrary model-generated shell code, URLs, or Python directly.
     - Constrain all tasks with server-enforced step/time/concurrency ceilings and forbid model-issued privilege changes. Allow all enabled registered EVENT actions within EVENT's permissions; do not add a second approval system.
     - Prevent recursive EVENT→THINK→EVENT feedback by bounding causation depth and rejecting repeated triggering chains; apply these controls across tasks, not only within a task's max_steps. Required infrastructure behavior can be implemented by EVENT and THINK using existing OPAL correlation metadata.
-    - EVENT is authoritative for action execution status: 202 means admission; queued/running/dropped/failed/timed_out/succeeded must be interpreted. No automatic retries, ordering, exactly-once delivery, or rollback of side effects are promised.
+    - EVENT is authoritative for action execution status: 202 means admission; queued/running/dropped/failed/timed_out/completed must be interpreted. No automatic retries, ordering, exactly-once delivery, or rollback of side effects are promised.
     - The assistant's readable decisions are short summaries and action references, never hidden chain-of-thought or secrets.
     - Evaluation readiness: optional caller metadata is preserved on Task records; action steps report sanitized action_input. No evalset management API is introduced.
 
@@ -34,28 +34,28 @@ info:
     Recommended initial setting keys (registered keys are discoverable through GET settings):
     `models.default_id`, `providers.<id>.type`, `providers.<id>.base_url`, `providers.<id>.enabled`, `providers.<id>.credential_ref`, `event.base_url`, `event.credential_ref`, `task.default_max_steps`, `task.max_steps_limit`, `task.default_timeout_seconds`, `task.timeout_limit_seconds`, `task.max_concurrent`, `task.retention_days`, `session.retention_days`.
     Provider adapters can extend settings without changing the core REST schema. Input schema and natural-language descriptions for EVENT actions are recommended EVENT-side enhancements and not new THINK APIs.
-  license:
-    name: Internal use
 servers:
 - url: http://127.0.0.1:8080
   description: Illustrative local endpoint; actual bind address and port are configurable.
 tags:
+- name: config
+  description: Save, load, validate, and inspect portable module configuration.
 - name: tasks
   description: Universal reasoning and autonomous work unit.
 - name: sessions
   description: Optional persistent conversational context.
 - name: models
   description: Read-only model discovery.
-- name: settings
-  description: Service settings with per-key management.
 - name: health
   description: Health, liveness, and readiness.
 - name: persona
   description: Manage named persona identities adopting the shared OPAL persona identifiers introduced by OPAL Say v1.6.0.
-- name: info
-  description: Service identity, version and liveness probes.
 - name: service
   description: Service process lifecycle (start, stop, log tail).
+- name: profiles
+  description: 'Reusable namespaced configuration profiles; at most one is locally active.
+    Think declares no compartment fields today (`modules.opal-think` is an explicit empty
+    schema), but profile records, selection and portability behave suite-wide.'
 security:
 - BearerAuth: []
 paths:
@@ -118,8 +118,9 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/ServiceUnavailable'
       x-opal-cli:
         group: task
-        command: create
+        command: add
         aliases:
+        - create
         - ask
         - chat
     get:
@@ -274,6 +275,8 @@ paths:
         EVENT action already running may still complete, and its side effects are not undone. Repeated cancellation
         of an in-progress task is idempotent. Terminal task returns 409. Cancellation takes effect asynchronously;
         poll/show or watch for cancelled or another terminal status.
+      parameters:
+      - $ref: './shared/opal_kernel.yaml#/components/parameters/IdempotencyKey'
       responses:
         '202':
           description: Cancellation requested, not guaranteed instantaneous.
@@ -546,449 +549,38 @@ paths:
         command: show
   /api/v1/profile/:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/profiles_collection'
-    x-opal-cli:
-      get:
-        parent: config
-        group: profile
-        command: list
-      post:
-        parent: config
-        group: profile
-        command: add
   /api/v1/profile/{profile_id}:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/profile_item'
-    x-opal-cli:
-      get:
-        parent: config
-        group: profile
-        command: show
-      patch:
-        parent: config
-        group: profile
-        command: update
-      delete:
-        parent: config
-        group: profile
-        command: remove
   /api/v1/profile/{profile_id}/activate:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/profile_activate'
-    x-opal-cli:
-      post:
-        parent: config
-        group: profile
-        command: activate
   /api/v1/setting/:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/settings_collection'
-    x-opal-cli:
-      get:
-        parent: config
-        group: setting
-        command: list
-      patch:
-        parent: config
-        group: setting
-        command: update
-        aliases:
-        - setting patch
   /api/v1/setting/{key}:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/settings_key'
-    x-opal-cli:
-      get:
-        parent: config
-        group: setting
-        command: show
-      put:
-        parent: config
-        group: setting
-        command: set
-      delete:
-        parent: config
-        group: setting
-        command: remove
+  /api/v1/config/save:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/config_save'
+  /api/v1/config/load:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/config_load'
+  /api/v1/config/validate:
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/config_validate'
   /api/v1/health/:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/health'
-    x-opal-cli:
-      get:
-        group: info
-        command: health
-  /api/v1/info/:
-    $ref: './shared/opal_kernel.yaml#/components/pathItems/info'
-    x-opal-cli:
-      get:
-        group: info
-        command: version
-  /api/v1/info/ping:
-    $ref: './shared/opal_kernel.yaml#/components/pathItems/info_ping'
-    x-opal-cli:
-      get:
-        group: info
-        command: ping
   /api/v1/health/live:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/health_live'
-    x-opal-cli:
-      get:
-        group: info
-        command: live
   /api/v1/health/ready:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/health_ready'
-    x-opal-cli:
-      get:
-        group: info
-        command: ready
-  /api/v1/backup/list:
-    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_list'
-    x-opal-cli:
-      get:
-        group: backup
-        command: list
-  /api/v1/backup/create:
-    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_create'
-    x-opal-cli:
-      post:
-        group: backup
-        command: create
-  /api/v1/backup/download/{filename}:
-    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_download'
-    x-opal-cli:
-      get:
-        group: backup
-        command: download
-  /api/v1/backup/restore/{filename}:
-    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_restore'
-    x-opal-cli:
-      post:
-        group: backup
-        command: restore
-  /api/v1/backup/{filename}:
-    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_delete'
-    x-opal-cli:
-      delete:
-        group: backup
-        command: remove
-  /api/v1/backup/export:
-    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_export'
-    x-opal-cli:
-      get:
-        group: backup
-        command: export
-  /api/v1/backup/import:
-    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_import'
-    x-opal-cli:
-      post:
-        group: backup
-        command: import
-  /api/v1/backup/validate:
-    $ref: './shared/opal_kernel.yaml#/components/pathItems/backup_validate_post'
-    x-opal-cli:
-      post:
-        group: backup
-        command: validate
   /api/v1/service/start:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/service_start'
-    x-opal-cli:
-      post:
-        group: service
-        command: start
   /api/v1/service/stop:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/service_stop'
-    x-opal-cli:
-      post:
-        group: service
-        command: stop
   /api/v1/service/log:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/service_log'
-    x-opal-cli:
-      get:
-        group: service
-        command: log
   /api/v1/persona/:
-    get:
-      tags:
-      - persona
-      summary: List Personas
-      description: List registered OPAL persona. A persona is a named assistant identity for conversation sessions and tasks; may bind an OPAL Say voice identifier for spoken replies. Return the complete bounded configuration collection; pagination is not supported.
-      operationId: opal_persona_list
-      parameters:
-      - name: enabled
-        in: query
-        required: false
-        description: If supplied, filter by enabled state.
-        schema:
-          type: boolean
-      responses:
-        '401':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
-        '403':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
-        '200':
-          description: Registered persona.
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/PersonaRead'
-          headers:
-            X-Opal-Session-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
-            X-Opal-Transaction-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
-            X-Opal-Request-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
-            X-Opal-Causation-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
-            ETag:
-              description: Strong revision of logical portable configuration
-              schema:
-                type: string
-
-        '422':
-          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        parent: config
-        group: persona
-        command: list
-    post:
-      tags:
-      - persona
-      summary: Create Persona
-      description: Register a persona. If `voice_id` is supplied, it names an OPAL Say voice identifier; this service does not validate voice existence locally. Strong If-Match is mandatory.
-      operationId: opal_persona_create
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PersonaCreate'
-      responses:
-        '401':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
-        '403':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
-        '201':
-          description: Persona created.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PersonaRead'
-          headers:
-            X-Opal-Session-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
-            X-Opal-Transaction-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
-            X-Opal-Request-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
-            X-Opal-Causation-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
-            Location:
-              description: Resource URL
-              schema:
-                type: string
-        '409':
-          description: The requested `persona_id` is already registered.
-          content:
-            application/json:
-              schema:
-                $ref: './shared/opal_kernel.yaml#/components/schemas/OpalError'
-          headers:
-            X-Opal-Session-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
-            X-Opal-Transaction-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
-            X-Opal-Request-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
-            X-Opal-Causation-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
-
-        '422':
-          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-        '412':
-          $ref: './shared/opal_kernel.yaml#/components/responses/PreconditionFailed'
-        '428':
-          $ref: './shared/opal_kernel.yaml#/components/responses/PreconditionRequired'
-      parameters:
-      - $ref: './shared/opal_kernel.yaml#/components/parameters/IfMatch'
-      x-opal-cli:
-        parent: config
-        group: persona
-        command: add
-    parameters:
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/persona_collection'
   /api/v1/persona/{persona_id}/validate:
-    post:
-      summary: Validate Persona
-      description: Check that a persona is registered and enabled and that its declared bindings can be resolved.
-      operationId: opal_persona_validate
-      tags:
-      - persona
-      responses:
-        '401':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
-        '403':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
-        '404':
-          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
-        '200':
-          description: Persona validation report.
-          content:
-            application/json:
-              schema:
-                $ref: './shared/opal_kernel.yaml#/components/schemas/OpalValidationReport'
-          headers:
-            X-Opal-Session-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
-            X-Opal-Transaction-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
-            X-Opal-Request-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
-            X-Opal-Causation-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
-
-        '422':
-          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        parent: config
-        group: persona
-        command: validate
-    parameters:
-    - $ref: '#/components/parameters/PersonaId'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/persona_validate'
   /api/v1/persona/{persona_id}:
-    parameters:
-    - $ref: '#/components/parameters/PersonaId'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalTransactionIdParameter'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalRequestIdParameter'
-    - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalCausationIdParameter'
-    get:
-      tags:
-      - persona
-      summary: Get Persona
-      description: Return one registered persona.
-      operationId: opal_persona_get
-      responses:
-        '401':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
-        '403':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
-        '200':
-          description: Persona.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PersonaRead'
-          headers:
-            X-Opal-Session-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
-            X-Opal-Transaction-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
-            X-Opal-Request-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
-            X-Opal-Causation-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
-            ETag:
-              description: Strong revision of logical portable configuration
-              schema:
-                type: string
-
-        '404':
-          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
-        '422':
-          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        parent: config
-        group: persona
-        command: show
-    patch:
-      tags:
-      - persona
-      summary: Update Persona
-      description: Partially update a persona.
-      operationId: opal_persona_patch
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PersonaUpdate'
-      responses:
-        '401':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
-        '403':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
-        '200':
-          description: Updated persona.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PersonaRead'
-          headers:
-            X-Opal-Session-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
-            X-Opal-Transaction-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
-            X-Opal-Request-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
-            X-Opal-Causation-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
-
-        '404':
-          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
-        '422':
-          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-        '412':
-          $ref: './shared/opal_kernel.yaml#/components/responses/PreconditionFailed'
-        '428':
-          $ref: './shared/opal_kernel.yaml#/components/responses/PreconditionRequired'
-      parameters:
-      - $ref: './shared/opal_kernel.yaml#/components/parameters/IfMatch'
-      x-opal-cli:
-        parent: config
-        group: persona
-        command: update
-    delete:
-      tags:
-      - persona
-      summary: Delete Persona
-      description: Remove a persona registration. Strong If-Match is mandatory.
-      operationId: opal_persona_delete
-      responses:
-        '401':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Unauthorized'
-        '403':
-          $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
-        '204':
-          description: Persona removed.
-          headers:
-            X-Opal-Session-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalSessionIdHeader'
-            X-Opal-Transaction-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalTransactionIdHeader'
-            X-Opal-Request-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalRequestIdHeader'
-            X-Opal-Causation-Id:
-              $ref: './shared/opal_kernel.yaml#/components/headers/OpalCausationIdHeader'
-
-        '404':
-          $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
-        '422':
-          $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-        '412':
-          $ref: './shared/opal_kernel.yaml#/components/responses/PreconditionFailed'
-        '428':
-          $ref: './shared/opal_kernel.yaml#/components/responses/PreconditionRequired'
-      parameters:
-      - $ref: './shared/opal_kernel.yaml#/components/parameters/IfMatch'
-      x-opal-cli:
-        parent: config
-        group: persona
-        command: remove
+    $ref: './shared/opal_kernel.yaml#/components/pathItems/persona_item'
 components:
   securitySchemes:
     BearerAuth: {$ref: './shared/opal_kernel.yaml#/components/securitySchemes/BearerAuth'}
@@ -1035,15 +627,7 @@ components:
         minLength: 1
   schemas:
     TaskStatus:
-      type: string
-      description: Terminal states are completed, failed, cancelled and timed_out.
-      enum:
-      - queued
-      - running
-      - completed
-      - failed
-      - cancelled
-      - timed_out
+      $ref: './shared/opal_kernel.yaml#/components/schemas/OpalLifecycleStatus'
     TaskCreate:
       type: object
       additionalProperties: false
@@ -1099,7 +683,8 @@ components:
         selects a registered OPAL persona: its service-local bindings
         (persona.<id>.model_id / .instructions / .generation) supply per-field
         defaults below any explicit request fields (kernel precedence: request >
-        persona binding > profile > service default), and override the session's
+        persona binding > selected profile's module override > selected profile's
+        shared value > service default), and override the session's
         default persona. Referencing an unknown persona returns 422
         invalid_persona; a disabled persona returns 422 persona_disabled.
     TaskStep:
@@ -1139,9 +724,12 @@ components:
             expose secrets, credentials, or hidden reasoning; diagnostic only.
         status:
           type: string
+          description: 'Shared lifecycle states (OpalLifecycleStatus). queued is unused —
+            a recorded step is already underway — and dropped mirrors EVENT dispatch loss
+            for action steps.'
           enum:
-          - started
-          - succeeded
+          - running
+          - completed
           - failed
           - timed_out
           - dropped
@@ -1388,18 +976,12 @@ components:
       - description
       description: Models are discovered from configured provider adapters, not installed or deleted via this REST
         API.
-    PersonaCreate:
-      $ref: './shared/opal_kernel.yaml#/components/schemas/OpalPersonaCreate'
-    PersonaUpdate:
-      $ref: './shared/opal_kernel.yaml#/components/schemas/OpalPersonaUpdate'
-    PersonaRead:
-      $ref: './shared/opal_kernel.yaml#/components/schemas/OpalPersonaRead'
 x-opal-cli-commands:
-  ask: alias of `task create` (POST /api/v1/task/ + watch/show)
-  chat: alias of `task create` bound to a session (session add, optional initial, + POST /api/v1/task/
+  ask: alias of `task add` (POST /api/v1/task/ + watch/show)
+  chat: alias of `task add` bound to a session (session add, optional initial, + POST /api/v1/task/
     per turn)
   task:
-  - create
+  - add
   - list
   - show
   - watch
@@ -1412,42 +994,31 @@ x-opal-cli-commands:
   model:
   - list
   - show
-  config:
-    profile:
-    - list
-    - add
-    - show
-    - update
-    - remove
-    - activate
-    setting:
-    - list
-    - patch
-    - show
-    - set
-    - remove
-    persona:
-    - list
-    - add
-    - show
-    - update
-    - remove
-    - validate
-  info:
-  - version
-  - ping
-  - health
-  - live
-  - ready
-  backup:
+  profile:
   - list
-  - create
-  - download
-  - restore
+  - add
+  - show
+  - update
   - remove
-  - export
-  - import
+  - activate
+  config:
+  - save
+  - load
   - validate
+  config setting:
+  - list
+  - show
+  - set
+  - remove
+  persona:
+  - list
+  - add
+  - show
+  - update
+  - remove
+  - validate
+  info:
+  - health
   service:
   - start
   - stop
@@ -1467,11 +1038,11 @@ x-opal-event-integration:
   - rules:write
   - settings:write
   note: >-
-    Verified live against EVENT 1.7.1, where these scopes exist as an
+    Verified live against EVENT 2.0.0, where these scopes exist as an
     `execute`-scoped named principal — optionally narrowed with `actions` and
     `own_receipts_only` (`security.rest_auth.principals`). THINK submits every
     execute with a stable caller-scoped `Idempotency-Key` (`task:call`), making
-    admission retry-safe (EVENT 1.7.1 dedups to the original receipt; a reused
+    admission retry-safe (EVENT 2.0.0 dedups to the original receipt; a reused
     key with different work is 409), and declares the derived hop via
     `X-Opal-Chain-Depth` (task depth + 1). On EVENT versions without keyed
     dedup an ambiguous submission produces at most one duplicate — never a
@@ -1480,8 +1051,17 @@ x-opal-event-integration:
     receipt stays retrievable. THINK-side action permission additionally
     requires the action id to appear in `event.action_allowlist`.
 x-opal-authorization: {$ref: './shared/opal_kernel.yaml#/x-opal-authorization'}
+x-opal-profile-namespace:
+  compartment: opal-think
+  schema: './shared/opal_kernel.yaml#/components/schemas/OpalThinkProfileNamespace'
+  patch_schema: './shared/opal_kernel.yaml#/components/schemas/OpalThinkProfileNamespacePatch'
+  description: >-
+    Declares this module's compartment key in namespaced profiles and the
+    schemas that validate it. Think declares no profile-specific defaults; the
+    compartment is an explicit empty closed schema that preserves the
+    registered namespace for future fields. See docs/PROFILE_MIGRATION.md.
 x-opal-context-standard:
-  version: '1.4'
+  version: '2.0.0'
   headers:
   - X-Opal-Session-Id
   - X-Opal-Transaction-Id
@@ -1491,7 +1071,8 @@ x-opal-context-standard:
   id_format: opaque-printable-ascii-1-to-128
   transaction_atomicity: false
   events:
-    $ref: './shared/opal_kernel.yaml#/x-opal-event-envelope'
+    envelope:
+      $ref: './shared/opal_kernel.yaml#/x-opal-event-envelope'
     metadata_schema_version: '1.0'
   pagination:
     history: none
@@ -1504,3 +1085,27 @@ x-opal-context-standard:
     stale_status: 412
   streaming: Include HTTP context headers before bytes; after headers are sent, failures are represented
     by transport-specific terminal events or stream termination; no invented resumability.
+x-opal-health-details:
+  version: '1.0'
+  description: >-
+    Module-defined members of OpalHealthReport.details. Think declares no
+    health-specific diagnostics today; `details` may still carry
+    implementation-defined members that consumers must treat as optional.
+  members: {}
+x-opal-snapshot:
+  version: '1.0'
+  module: opal-think
+  format_versions:
+  - '1.0.0'
+  resources:
+  - profiles
+  - personas
+  - models
+  - engines
+  description: >-
+    Declares the canonical module identity and resource sections carried in this module's
+    configuration snapshots. `config load`/`config validate` validate `snapshot` against the shared
+    `OpalConfigSnapshot` envelope and the declared `module` identity and resource
+    sections; wrong-module, unsupported-version, and unknown-section snapshots are
+    rejected. Snapshots carry persistent desired configuration only:
+    profiles, personas, models, engines; never runtime history, sessions, streams, binaries, or secrets.

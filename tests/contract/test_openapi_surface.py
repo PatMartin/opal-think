@@ -42,7 +42,7 @@ def _ops(spec: dict) -> set[tuple[str, str]]:
 def test_all_contract_operations_present(client: TestClient) -> None:
     contract_ops = _ops(_contract())
     generated_ops = _ops(_generated(client))
-    assert len(contract_ops) == 44, f"contract inventory drifted: {len(contract_ops)} ops"
+    assert len(contract_ops) == 36, f"contract inventory drifted: {len(contract_ops)} ops"
     assert contract_ops == generated_ops, (
         f"missing: {sorted(contract_ops - generated_ops)}; undocumented extras: {sorted(generated_ops - contract_ops)}"
     )
@@ -71,8 +71,7 @@ def test_key_status_and_params(client: TestClient) -> None:
     assert "503" in paths["/api/v1/health/ready"]["get"]["responses"]
     assert "201" in paths["/api/v1/persona/"]["post"]["responses"]
     assert "204" in paths["/api/v1/persona/{persona_id}"]["delete"]["responses"]
-    assert "200" in paths["/api/v1/info/"]["get"]["responses"]
-    assert "200" in paths["/api/v1/info/ping"]["get"]["responses"]
+    assert "200" in paths["/api/v1/health/"]["get"]["responses"]
 
 
 def test_key_schema_constraints(client: TestClient) -> None:
@@ -93,4 +92,4 @@ def test_generated_openapi_parses_and_reports(client: TestClient) -> None:
     spec = _generated(client)
     assert spec["openapi"].startswith("3.1") or spec["openapi"].startswith("3.0")
     assert spec["info"]["title"] == "OPAL Think API"
-    assert spec["info"]["version"] == "1.7.1"
+    assert spec["info"]["version"] == "0.1.0"
