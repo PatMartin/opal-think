@@ -12,7 +12,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 PERSONA = {"persona_id": "amy", "name": "Amy", "description": "ops assistant", "voice_id": None, "enabled": True}
-PROFILE = {"name": "studio", "settings": {"task.default_max_steps": 4}}
+PROFILE = {"name": "studio", "modules": {"opal-say": {"voice_id": "en-gb-alan-low"}}}
 
 
 def _etag(client: TestClient) -> str:
@@ -49,7 +49,7 @@ def test_save_snapshot_shape(client: TestClient) -> None:
     assert "pending_restart_fields" not in snap["settings"]
     assert [p["persona_id"] for p in snap["resources"]["personas"]] == ["amy"]
     assert [p["name"] for p in snap["resources"]["profiles"]] == ["studio"]
-    assert snap["resources"]["profiles"][0]["settings"] == {"task.default_max_steps": 4}
+    assert snap["resources"]["profiles"][0]["modules"] == {"opal-say": {"voice_id": "en-gb-alan-low"}}
 
 
 def test_save_is_not_a_mutation(client: TestClient) -> None:
@@ -94,8 +94,8 @@ def test_validate_bad_snapshot(client: TestClient) -> None:
         "resources": {
             "personas": [{"persona_id": "amy"}, {"persona_id": "amy", "name": "dupe"}],
             "profiles": [
-                {"id": 1, "name": "a", "is_active": True},
-                {"id": 1, "name": "b", "is_active": True, "settings": {"nope.key": 1}},
+                {"id": "1", "name": "a", "is_active": True},
+                {"id": "1", "name": "b", "is_active": True, "shared": {"nope": 1}},
             ],
         },
     }
@@ -103,7 +103,7 @@ def test_validate_bad_snapshot(client: TestClient) -> None:
     assert body["valid"] is False
     joined = "; ".join(e["message"] + e["path"] for e in body["errors"])
     for fragment in ("unknown.key", "task.max_concurrent", "pending_restart_fields", "duplicate persona id: amy",
-                     "duplicate profile id: 1", "active profile", "nope.key"):
+                     "duplicate profile id: 1", "active profile", "closed empty object"):
         assert fragment in joined, fragment
 
 
@@ -152,7 +152,7 @@ def test_load_replaces_portable_config(client: TestClient) -> None:
         "settings": {"task.default_timeout_seconds": 300},
         "resources": {
             "personas": [{"persona_id": "bob", "name": "Bob", "enabled": False}],
-            "profiles": [{"id": 5, "name": "lean", "is_active": True, "settings": {"task.max_concurrent": 2}}],
+            "profiles": [{"id": "5", "name": "lean", "is_active": True, "modules": {"opal-say": {"voice_id": "en-gb"}}}],
         },
     }
     response = client.post("/api/v1/config/load", json={"snapshot": snap}, headers={"If-Match": _etag(client)})
@@ -166,7 +166,8 @@ def test_load_replaces_portable_config(client: TestClient) -> None:
     assert client.get("/api/v1/persona/bob").json()["enabled"] is False
     profiles = client.get("/api/v1/profile/").json()
     assert [p["name"] for p in profiles] == ["lean"] and profiles[0]["is_active"] is True
-    # loaded presets are stored, not auto-applied: max_concurrent stays default until activated
+    assert profiles[0]["id"] == "5" and profiles[0]["modules"]["opal-say"] == {"voice_id": "en-gb"}
+    # activation is selection-only now: no settings side effect to check
     assert client.get("/api/v1/setting/task.max_concurrent").json()["value"] == 4
 
 

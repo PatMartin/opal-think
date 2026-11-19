@@ -399,51 +399,113 @@ class PersonaRead(BaseModel):
     updated_at: datetime
 
 
-# -- profiles (v1.7.1; kernel ``OpalProfile`` family) ----------------------------------------------------
+# -- profiles (v0.1.0 kernel ``OpalProfile`` family: namespaced ``shared`` + ``modules``) --------------
 #
-# A profile is a named preset of operating defaults owned by this service (the suite's
-# authoritative profile registry, mirroring persona ownership). ``id``/``name``/
-# ``is_active`` are suite-standard; ``settings`` is this service's compartment — a
-# portable-settings preset applied on activation. Models allow extra properties so
-# other OPAL services can attach their own compartments; think stores them opaquely.
+# A profile is a portable namespaced document: opaque string ``id``, required
+# ``shared`` and ``modules`` sections (empty objects valid). The opal-think
+# compartment is a closed empty schema — activation is a local selection only and
+# changes no live settings; foreign module compartments are stored and returned
+# verbatim. ``is_active`` is a local projection: at most one profile is active.
+
+PROFILE_COMPARTMENT = "opal-think"
+
+# Suite-standard top-level fields; anything else in a stored v2 record is a foreign
+# compartment that migrates under ``modules``.
+_PROFILE_ENVELOPE_FIELDS = {
+    "id", "name", "description", "is_active", "shared", "modules", "created_at", "updated_at",
+}
+
+
+def _check_profile_envelope(shared: dict | None, modules: dict | None, patch: bool = False) -> None:
+    """Closed-envelope checks shared by create/patch payloads (kernel
+    ``OpalProfileShared``/``OpalProfileModules(Patch)`` + ``x-opal-profiles``)."""
+    if shared:
+        raise ValueError("'shared' is a closed empty object; members are rejected")
+    for key, compartment in (modules or {}).items():
+        if not isinstance(compartment, dict):
+            raise ValueError(f"module compartment '{key}' must be an object")
+        if patch and key != PROFILE_COMPARTMENT:
+            raise ValueError(
+                f"foreign compartment '{key}' is read-only; patches may only target '{PROFILE_COMPARTMENT}'"
+            )
+        if key == PROFILE_COMPARTMENT and compartment:
+            raise ValueError(f"'modules.{PROFILE_COMPARTMENT}' is a closed empty schema; members are rejected")
 
 
 class ProfileCreate(BaseModel):
-    """Kernel ``OpalProfileCreate``: ``name`` required; ``is_active: true`` makes this
-    the only active profile and applies its ``settings`` preset in the same write."""
+    """Kernel ``OpalProfileCreate``: ``name`` required; omitted ``shared``/``modules``
+    normalize to empty objects. Foreign compartments are stored verbatim;
+    ``is_active: true`` activates the new profile and deactivates all others."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
-    id: int | None = Field(default=None, ge=1)
+    id: str | None = Field(default=None, min_length=1)
     name: str = Field(min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=1000)
     is_active: bool = False
-    settings: dict[str, Any] | None = None
+    shared: dict[str, Any] = Field(default_factory=dict)
+    modules: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _envelope(self) -> ProfileCreate:
+        _check_profile_envelope(self.shared, self.modules)
+        return self
 
 
 class ProfilePatch(BaseModel):
-    """Kernel ``OpalProfilePatch``: partial top-level merge — each supplied key
-    (including foreign service compartments) replaces that value wholesale.
-    ``is_active: true`` activates this profile (deactivating all others)."""
+    """Kernel ``OpalProfilePatch``: partial update; compartment values merge
+    field-wise over the stored compartment. ``modules`` may contain only the
+    receiving service's own compartment key — foreign edits are rejected (422)."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     name: NonNull[str] = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=1000)
     is_active: bool | None = None
-    settings: dict[str, Any] | None = None
+    shared: dict[str, Any] | None = None
+    modules: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> ProfilePatch:
+        if not self.model_fields_set:
+            raise ValueError("at least one property is required")
+        _check_profile_envelope(self.shared, self.modules, patch=True)
+        return self
 
 
 class Profile(BaseModel):
-    """Kernel ``OpalProfile`` wire shape: suite-standard fields plus every stored
-    service-defined compartment (``settings`` and foreign keys are preserved)."""
+    """Kernel ``OpalProfile`` wire shape: opaque string ``id``, required ``shared``
+    and ``modules`` (empty objects valid). v1.7.1 stored records (integer ``id``,
+    flat ``settings`` preset compartment, top-level foreign compartments) upgrade
+    on read: ids stringify, ``settings`` is discarded (the v3 opal-think
+    compartment declares no fields to carry it), and foreign top-level keys fold
+    under ``modules``."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
-    id: int = Field(ge=1)
+    id: str = Field(min_length=1)
     name: str
     description: str | None = None
     is_active: bool
-    settings: dict[str, Any] | None = None
+    shared: dict[str, Any] = Field(default_factory=dict)
+    modules: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_v2(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = dict(data)
+            data.pop("settings", None)  # v2 preset compartment; dropped in v3
+            data.setdefault("shared", {})
+            data.setdefault("modules", {})
+            if not isinstance(data["modules"], dict):
+                data["modules"] = {}
+            if isinstance(data.get("id"), int):
+                data["id"] = str(data["id"])
+            # v2 stored foreign compartments as extra top-level keys; they live
+            # under ``modules`` in v3.
+            for key in [k for k in data if k not in _PROFILE_ENVELOPE_FIELDS]:
+                data["modules"].setdefault(key, data.pop(key))
+        return data

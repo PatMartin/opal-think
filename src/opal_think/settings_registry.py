@@ -215,14 +215,6 @@ class ProfileConflict(Exception):
     deleting the active profile, or changing the immutable id."""
 
 
-class ProfileSettingsInvalid(Exception):
-    """A profile's ``settings`` compartment failed settings-registry validation (422)."""
-
-    def __init__(self, errors: list[dict[str, Any]]) -> None:
-        super().__init__("; ".join(f"{e['key']}: {e['reason']}" for e in errors))
-        self.errors = errors
-
-
 class SettingsStore:
     """SQLite-backed portable-configuration store with a global revision and per-key revisions.
 
@@ -251,12 +243,36 @@ class SettingsStore:
             )
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS profiles ("
-                "id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE,"
+                "id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,"
                 " is_active INTEGER NOT NULL DEFAULT 0, record TEXT NOT NULL)"
             )
             conn.execute("INSERT OR IGNORE INTO meta (name, value) VALUES ('revision', '0')")
+            self._migrate_profiles_v2(conn)
             if "origin" not in {r[1] for r in conn.execute("PRAGMA table_info(personas)")}:
                 conn.execute("ALTER TABLE personas ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
+
+    def _migrate_profiles_v2(self, conn: sqlite3.Connection) -> None:
+        """v1.7.1 -> v0.1.0 storage upgrade: ``profiles.id`` INTEGER -> TEXT (v3
+        namespaced documents use opaque string ids) and each record JSON drops the
+        retired flat ``settings`` preset compartment. No-op on a v3 table."""
+        col = next((r for r in conn.execute("PRAGMA table_info(profiles)").fetchall() if r[1] == "id"), None)
+        if col is None or str(col[2]).upper() == "TEXT":
+            return
+        conn.execute("ALTER TABLE profiles RENAME TO profiles_v2")
+        conn.execute(
+            "CREATE TABLE profiles ("
+            "id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,"
+            " is_active INTEGER NOT NULL DEFAULT 0, record TEXT NOT NULL)"
+        )
+        for pid, name, is_active, record_json in conn.execute(
+            "SELECT id, name, is_active, record FROM profiles_v2"
+        ).fetchall():
+            record = self.migrate_profile_record(json.loads(record_json))
+            conn.execute(
+                "INSERT INTO profiles (id, name, is_active, record) VALUES (?,?,?,?)",
+                (str(pid), name, is_active, json.dumps(record)),
+            )
+        conn.execute("DROP TABLE profiles_v2")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path, timeout=10)
@@ -449,19 +465,34 @@ class SettingsStore:
 
         return self._checked_write(write, expect_global=expect_global)
 
-    # -- profiles (v1.7.1; share the global config revision) ---------------------------------------------
+    # -- profiles (v0.1.0 kernel v3 namespaced profiles; share the global revision) ---------------------
     #
-    # A profile is a named preset of operating defaults. ``id``/``name``/``is_active``
-    # are the indexed suite-standard fields; the ``record`` JSON holds everything else:
-    # description, timestamps, this service's ``settings`` compartment, and any foreign
-    # compartments other OPAL services attach (stored opaquely — never interpreted).
-    # Activating a profile applies its ``settings`` compartment as a write-only preset:
-    # the values are written into the settings table in the same transaction and are
-    # NOT reverted when another profile is activated later.
+    # A profile is a portable namespaced document: opaque string ``id``, required
+    # ``shared`` and ``modules`` maps (empty objects valid). Indexed fields are
+    # ``id``/``name``/``is_active``; the ``record`` JSON holds description, timestamps,
+    # ``shared`` and every module compartment (foreign ones verbatim). The opal-think
+    # compartment is a closed empty schema, so activating a profile is only a local
+    # selection change — it no longer applies a settings preset.
+
+    @staticmethod
+    def migrate_profile_record(record: dict[str, Any]) -> dict[str, Any]:
+        """v2 stored record -> v3 namespaced document: drop the flat ``settings``
+        preset compartment (the v3 opal-think compartment declares no fields), fold
+        any foreign top-level keys under ``modules``, and normalize ``shared``/
+        ``modules`` to objects."""
+        record = dict(record)
+        record.pop("settings", None)
+        modules = record.pop("modules", None)
+        modules = dict(modules) if isinstance(modules, dict) else {}
+        for key in [k for k in record if k not in ("description", "created_at", "updated_at", "shared")]:
+            modules.setdefault(key, record.pop(key))
+        record["modules"] = modules
+        record.setdefault("shared", {})
+        return record
 
     @staticmethod
     def _profile_row(row: sqlite3.Row | tuple | None) -> dict[str, Any] | None:
-        """Recompose the wire record: indexed suite fields + opaque record JSON.
+        """Recompose the wire record: indexed suite fields + record JSON.
 
         Accepts both ``sqlite3.Row`` (reads via ``conn.row_factory``) and plain tuples
         ``(id, name, is_active, record)`` from write transactions."""
@@ -470,51 +501,25 @@ class SettingsStore:
         pid, name, is_active, record_json = (
             (row["id"], row["name"], row["is_active"], row["record"]) if isinstance(row, sqlite3.Row) else row
         )
-        return {"id": pid, "name": name, "is_active": bool(is_active), **json.loads(record_json)}
+        record = SettingsStore.migrate_profile_record(json.loads(record_json))
+        return {"id": str(pid), "name": name, "is_active": bool(is_active), **record}
 
-    @staticmethod
-    def _preset_errors(record: dict[str, Any]) -> list[dict[str, Any]]:
-        """Validate a profile's ``settings`` compartment against the registry."""
-        errors = []
-        for key, value in (record.get("settings") or {}).items():
-            if key == "pending_restart_fields":
-                errors.append({"key": key, "reason": "reserved, read-only key"})
-                continue
-            definition = lookup(key)
-            if definition is None:
-                errors.append({"key": key, "reason": "unknown setting key"})
-            elif (reason := definition.check(value)) is not None:
-                errors.append({"key": key, "reason": reason})
-        return errors
-
-    @staticmethod
-    def _write_preset(conn: sqlite3.Connection, revision: int, record: dict[str, Any]) -> None:
-        """Apply a profile's ``settings`` compartment as live setting overrides."""
-        now = _now()
-        for key, value in (record.get("settings") or {}).items():
-            conn.execute(
-                "INSERT INTO settings (key, value, revision, updated_at) VALUES (?,?,?,?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, revision=excluded.revision, "
-                "updated_at=excluded.updated_at",
-                (key, json.dumps(value), revision, now),
-            )
-
-    def _activate(self, conn: sqlite3.Connection, revision: int, record: dict[str, Any]) -> None:
-        """Mark `record`'s profile the only active one and apply its preset."""
+    def _activate(self, conn: sqlite3.Connection, profile_id: str) -> None:
+        """Mark `profile_id` the only active profile (local selection only)."""
         conn.execute("UPDATE profiles SET is_active = 0")
-        conn.execute("UPDATE profiles SET is_active = 1 WHERE id = ?", (record["id"],))
-        self._write_preset(conn, revision, record)
-
-    @staticmethod
-    def _check_preset(record: dict[str, Any]) -> None:
-        errors = SettingsStore._preset_errors(record)
-        if errors:
-            raise ProfileSettingsInvalid(errors)
+        conn.execute("UPDATE profiles SET is_active = 1 WHERE id = ?", (profile_id,))
 
     @staticmethod
     def _profile_record_column(record: dict[str, Any]) -> str:
         """Record JSON = full document minus the indexed suite fields."""
         return json.dumps({k: v for k, v in record.items() if k not in ("id", "name", "is_active")})
+
+    @staticmethod
+    def _allocate_profile_id(conn: sqlite3.Connection) -> str:
+        """Next free opaque id: continues the integer sequence for ids allocated
+        before the v3 string-id migration."""
+        numeric = [int(r[0]) for r in conn.execute("SELECT id FROM profiles").fetchall() if str(r[0]).isdigit()]
+        return str(max(numeric, default=0) + 1)
 
     def list_profiles(self) -> list[dict[str, Any]]:
         """Complete bounded catalog ordered by id."""
@@ -523,7 +528,7 @@ class SettingsStore:
             rows = conn.execute("SELECT id, name, is_active, record FROM profiles ORDER BY id").fetchall()
         return [self._profile_row(r) for r in rows]
 
-    def get_profile(self, profile_id: int) -> dict[str, Any] | None:
+    def get_profile(self, profile_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             return self._profile_row(
@@ -534,47 +539,49 @@ class SettingsStore:
 
     def insert_profile_checked(
         self, record: dict[str, Any], *, expect_global: int | None = None, max_count: int = 10_000
-    ) -> tuple[int, int]:
+    ) -> tuple[int, str]:
         """Insert a profile; bumps the global revision. ``ProfileExists`` on duplicate
-        name/id or a full catalog; ``ProfileSettingsInvalid`` on a bad ``settings``
-        compartment; ``RevisionConflict`` on stale ETag. When the record is active it
-        becomes the only active profile and its preset applies in the same write.
+        name/id or a full catalog; ``RevisionConflict`` on stale ETag. When the record
+        is active it becomes the only active profile in the same write.
         Returns (revision, profile_id)."""
 
-        def write(conn: sqlite3.Connection) -> tuple[int, int]:
-            row = dict(record)
+        def write(conn: sqlite3.Connection) -> tuple[int, str]:
+            row = {"name": record["name"], "is_active": bool(record.get("is_active"))}
+            if record.get("id") is not None:
+                row["id"] = str(record["id"])
+            row.update(self.migrate_profile_record(
+                {k: v for k, v in record.items() if k not in ("id", "name", "is_active")}
+            ))
             if conn.execute("SELECT 1 FROM profiles WHERE name = ?", (row["name"],)).fetchone():
                 raise ProfileExists(f"profile name '{row['name']}' already exists")
             if row.get("id") is not None and conn.execute(
                 "SELECT 1 FROM profiles WHERE id = ?", (row["id"],)
             ).fetchone():
-                raise ProfileExists(f"profile id {row['id']} is already in use")
+                raise ProfileExists(f"profile id '{row['id']}' is already in use")
             if conn.execute("SELECT COUNT(*) FROM profiles").fetchone()[0] >= max_count:
                 raise ProfileExists(f"profile catalog is full (max {max_count})")
             if row.get("id") is None:
-                row["id"] = (conn.execute("SELECT MAX(id) FROM profiles").fetchone()[0] or 0) + 1
-            self._check_preset(row)
+                row["id"] = self._allocate_profile_id(conn)
             revision = self._bump(conn)
-            if row.get("is_active"):
-                self._activate(conn, revision, row)
+            if row["is_active"]:
+                self._activate(conn, row["id"])
             conn.execute(
                 "INSERT INTO profiles (id, name, is_active, record) VALUES (?,?,?,?)",
-                (row["id"], row["name"], int(bool(row.get("is_active"))), self._profile_record_column(row)),
+                (row["id"], row["name"], int(row["is_active"]), self._profile_record_column(row)),
             )
             return revision, row["id"]
 
         return self._checked_write(write, expect_global=expect_global)
 
     def update_profile_checked(
-        self, profile_id: int, changes: dict[str, Any], *, expect_global: int | None = None
+        self, profile_id: str, changes: dict[str, Any], *, expect_global: int | None = None
     ) -> int:
-        """Top-level merge into one profile record; bumps the global revision.
+        """Field-wise merge into one profile record; bumps the global revision.
         ``ProfileMissing`` on unknown id, ``ProfileExists`` on a name collision,
-        ``ProfileConflict`` on an ``id`` change, ``ProfileSettingsInvalid`` on a bad
-        ``settings`` compartment, ``RevisionConflict`` on stale ETag. ``is_active``
-        set true activates the profile (deactivating all others and applying its
-        preset); every other supplied key — including foreign compartments — is
-        merged verbatim."""
+        ``ProfileConflict`` on an ``id`` change, ``RevisionConflict`` on stale ETag.
+        ``is_active`` set true activates the profile (deactivating all others);
+        supplied ``shared``/``modules`` compartments merge field-wise over the
+        stored compartments — sibling fields and other compartments preserved."""
 
         def write(conn: sqlite3.Connection) -> int:
             row = conn.execute(
@@ -583,7 +590,7 @@ class SettingsStore:
             if row is None:
                 raise ProfileMissing(profile_id)
             patch = {k: v for k, v in changes.items() if k != "created_at"}
-            if "id" in patch and patch["id"] != profile_id:
+            if "id" in patch and str(patch["id"]) != profile_id:
                 raise ProfileConflict("profile id is immutable")
             patch.pop("id", None)
             if "name" in patch and conn.execute(
@@ -591,22 +598,34 @@ class SettingsStore:
             ).fetchone():
                 raise ProfileExists(f"profile name '{patch['name']}' already exists")
             record = self._profile_row(row)
-            record.update(patch)
+            for key in ("name", "description", "is_active", "shared"):
+                if key in patch:
+                    record[key] = patch[key]
+            if "modules" in patch:
+                merged_modules = dict(record.get("modules") or {})
+                for comp, fields in (patch["modules"] or {}).items():
+                    stored = merged_modules.get(comp)
+                    merged_modules[comp] = {**(stored if isinstance(stored, dict) else {}), **(fields or {})}
+                record["modules"] = merged_modules
             record["updated_at"] = _now()
-            self._check_preset(record)
             revision = self._bump(conn)
-            active = bool(record.get("is_active"))
             if patch.get("is_active") is True:
-                self._activate(conn, revision, record)
+                self._activate(conn, profile_id)
+                record["is_active"] = True
             conn.execute(
                 "UPDATE profiles SET name = ?, is_active = ?, record = ? WHERE id = ?",
-                (record["name"], int(active), self._profile_record_column(record), profile_id),
+                (
+                    record["name"],
+                    int(record["is_active"]),
+                    self._profile_record_column(record),
+                    profile_id,
+                ),
             )
             return revision
 
         return self._checked_write(write, expect_global=expect_global)
 
-    def delete_profile_checked(self, profile_id: int, *, expect_global: int | None = None) -> int:
+    def delete_profile_checked(self, profile_id: str, *, expect_global: int | None = None) -> int:
         """Delete a profile; bumps the global revision. ``ProfileMissing`` on unknown
         id; ``ProfileConflict`` when the profile is active (the active profile cannot
         be deleted); ``RevisionConflict`` on stale ETag."""
@@ -622,10 +641,10 @@ class SettingsStore:
 
         return self._checked_write(write, expect_global=expect_global)
 
-    def activate_profile_checked(self, profile_id: int, *, expect_global: int | None = None) -> int:
-        """Make `profile_id` the only active profile and apply its preset; bumps the
-        global revision. ``ProfileMissing`` on unknown id, ``ProfileSettingsInvalid``
-        on a bad stored preset, ``RevisionConflict`` on stale ETag."""
+    def activate_profile_checked(self, profile_id: str, *, expect_global: int | None = None) -> int:
+        """Make `profile_id` the only active profile (local selection only; the v3
+        opal-think compartment is empty so no settings change); bumps the global
+        revision. ``ProfileMissing`` on unknown id, ``RevisionConflict`` on stale ETag."""
 
         def write(conn: sqlite3.Connection) -> int:
             row = conn.execute(
@@ -635,10 +654,8 @@ class SettingsStore:
                 raise ProfileMissing(profile_id)
             record = self._profile_row(row)
             record["updated_at"] = _now()
-            self._check_preset(record)
             revision = self._bump(conn)
-            self._activate(conn, revision, record)
-            record["is_active"] = True
+            self._activate(conn, profile_id)
             conn.execute(
                 "UPDATE profiles SET record = ? WHERE id = ?",
                 (self._profile_record_column(record), profile_id),
@@ -689,15 +706,16 @@ class SettingsStore:
                 )
             conn.execute("DELETE FROM profiles")
             for p in profiles:
+                migrated = self.migrate_profile_record(p)
                 record = {
-                    "description": p.get("description"),
                     "created_at": p.get("created_at") or now,
                     "updated_at": p.get("updated_at") or now,
-                    **{k: v for k, v in p.items() if k not in ("id", "name", "is_active")},
+                    **migrated,
                 }
+                pid = str(p["id"]) if p.get("id") is not None else self._allocate_profile_id(conn)
                 conn.execute(
                     "INSERT INTO profiles (id, name, is_active, record) VALUES (?,?,?,?)",
-                    (p["id"], p["name"], int(bool(p.get("is_active"))), json.dumps(record)),
+                    (pid, p["name"], int(bool(p.get("is_active"))), json.dumps(record)),
                 )
             return revision
 

@@ -1,17 +1,15 @@
-"""Profile endpoints (``/api/v1/profile`` family, v1.7.1).
+"""Profile endpoints (``/api/v1/profile`` family, v0.1.0 kernel v3 namespaced profiles).
 
-A profile is a named preset of operating defaults; this service is the suite's
-authoritative profile registry (the same ownership role it plays for personas).
-``id``/``name``/``is_active`` are suite-standard; think's own compartment is
-``settings`` — a portable-settings preset validated against the settings registry.
-Foreign service compartments are stored opaquely and returned verbatim, so other
-OPAL services can attach their sections without think knowing their schemas.
+A profile is a portable namespaced document: opaque string ``id``, required ``shared``
+and ``modules`` maps (empty objects valid). This service is the suite's authoritative
+profile registry; foreign module compartments are stored and returned verbatim. The
+opal-think compartment is a closed empty schema, so activating a profile is only a
+local selection change — it no longer applies a settings preset.
 
 Profiles share the portable-configuration revision with settings and personas
 (``"s<n>"``): GET returns the complete bounded collection, and every mutation
-requires If-Match (428 missing, 422 malformed, 412 stale). Exactly one profile may
-be active; activation applies the ``settings`` compartment as a write-only preset
-in the same atomic write — it is not reverted when another profile activates.
+requires If-Match (428 missing, 422 malformed, 412 stale). At most one profile is
+active; zero is legal.
 """
 
 from __future__ import annotations
@@ -29,14 +27,13 @@ from opal_think.settings_registry import (
     ProfileConflict,
     ProfileExists,
     ProfileMissing,
-    ProfileSettingsInvalid,
     RevisionConflict,
     SettingsRegistry,
 )
 
 router = APIRouter(prefix="/api/v1/profile", tags=["profiles"])
 
-ProfileIdPath = Path(ge=1)
+ProfileIdPath = Path(min_length=1)
 
 # Generous internal ceiling for the "bounded" catalog; not a contractual limit.
 _PROFILES_MAX_COUNT = 10_000
@@ -46,7 +43,7 @@ def _profile_payload(row: dict[str, Any]) -> Profile:
     return Profile.model_validate(row)
 
 
-def _get_or_404(registry: SettingsRegistry, profile_id: int) -> dict[str, Any]:
+def _get_or_404(registry: SettingsRegistry, profile_id: str) -> dict[str, Any]:
     row = registry.store.get_profile(profile_id)
     if row is None:
         raise OpalHTTPException(404, "not_found", f"profile not found: {profile_id}")
@@ -67,10 +64,6 @@ def _checked(expected: int, fn) -> Any:
         raise OpalHTTPException(404, "not_found", f"profile not found: {exc}") from exc
     except (ProfileExists, ProfileConflict) as exc:
         raise OpalHTTPException(409, "conflict", str(exc)) from exc
-    except ProfileSettingsInvalid as exc:
-        raise OpalHTTPException(
-            422, "invalid_settings", "profile settings compartment failed validation", details=exc.errors
-        ) from exc
 
 
 @router.get("/", operation_id="opal_profile_list", summary="List profiles")
@@ -106,7 +99,7 @@ def create_profile(
 @router.get("/{profile_id}", operation_id="opal_profile_get", summary="Get profile")
 def get_profile(
     response: Response,
-    profile_id: int = ProfileIdPath,
+    profile_id: str = ProfileIdPath,
     registry: SettingsRegistry = Depends(get_settings),
 ) -> Profile:
     response.headers["ETag"] = registry.etag_collection()
@@ -117,7 +110,7 @@ def get_profile(
 def update_profile(
     body: ProfilePatch,
     request: Request,
-    profile_id: int = ProfileIdPath,
+    profile_id: str = ProfileIdPath,
     registry: SettingsRegistry = Depends(get_settings),
 ) -> Profile:
     expected = if_match_revision(request, "s")
@@ -131,7 +124,7 @@ def update_profile(
 @router.delete("/{profile_id}", operation_id="opal_profile_delete", summary="Delete profile", status_code=204)
 def delete_profile(
     request: Request,
-    profile_id: int = ProfileIdPath,
+    profile_id: str = ProfileIdPath,
     registry: SettingsRegistry = Depends(get_settings),
 ) -> Response:
     expected = if_match_revision(request, "s")
@@ -144,10 +137,11 @@ def delete_profile(
 @router.post("/{profile_id}/activate", operation_id="opal_profile_activate", summary="Activate profile")
 def activate_profile(
     request: Request,
-    profile_id: int = ProfileIdPath,
+    profile_id: str = ProfileIdPath,
     registry: SettingsRegistry = Depends(get_settings),
 ) -> Profile:
-    """Make this profile the only active one and apply its ``settings`` preset."""
+    """Make this profile the only active one (local selection; the empty opal-think
+    compartment means no settings change)."""
     expected = if_match_revision(request, "s")
     _checked(expected, lambda expect_global: registry.store.activate_profile_checked(
         profile_id, expect_global=expect_global

@@ -282,7 +282,8 @@ class TaskEngine:
         """Atomically admit a task. Returns (row, replayed). Raises OpalHTTPException on rejection."""
         body_hash = self._body_hash(body)
         # Kernel precedence per field: explicit request field > persona binding >
-        # profile > service default (profiles fold into the settings at activation).
+        # profile > service default. With an empty opal-think profile compartment the
+        # only remaining precedence is persona > service default.
         generation = ((persona or {}).get("snapshot") or {}).get("generation") or {}
         max_steps = min(
             body.max_steps or generation.get("max_steps") or self.setting("task.default_max_steps"),

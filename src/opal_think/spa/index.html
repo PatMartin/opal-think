@@ -95,9 +95,9 @@
   </section>
   <section id="view-profiles" class="panel hidden">
     <h2>Profiles <button class="small" id="profile-new">New profile</button></h2>
-    <p class="muted">Named presets of portable defaults. Activating a profile applies its <code>settings</code>
+    <p class="muted">Namespaced profiles (shared + module compartments). Activating a profile is a local selection only
       preset; other service compartments are stored verbatim. Exactly one profile is active.</p>
-    <table id="profiles-table"><thead><tr><th>ID</th><th>Name</th><th>Active</th><th>Settings</th><th>Other sections</th><th></th></tr></thead><tbody></tbody></table>
+    <table id="profiles-table"><thead><tr><th>ID</th><th>Name</th><th>Active</th><th>Modules</th><th></th></tr></thead><tbody></tbody></table>
     <div id="profile-detail" class="panel hidden"></div>
   </section>
   <section id="view-config" class="panel hidden">
@@ -444,12 +444,10 @@ async function loadProfiles() {
     profilesEtag = etag;
     tbody.replaceChildren();
     for (const p of body) {
-      const foreign = Object.keys(p).filter((k) => !["id", "name", "description", "is_active", "settings", "created_at", "updated_at"].includes(k));
       const tr = el("tr", {},
         tdText(p.id), tdText(p.name),
         td(p.is_active ? pill("active", "set") : pill("—")),
-        tdText(p.settings ? JSON.stringify(p.settings) : null, "muted"),
-        tdText(foreign.join(", ") || null, "muted"), td());
+        tdText(Object.keys(p.modules || {}).join(", ") || null, "muted"), td());
       const actions = tr.lastElementChild;
       const show = document.createElement("button");
       show.className = "small"; show.textContent = "Show";
@@ -475,14 +473,12 @@ async function loadProfiles() {
 $("#profile-new").addEventListener("click", async () => {
   const name = prompt("Profile name:");
   if (!name) return;
-  const raw = prompt('Settings preset as JSON object (e.g. {"task.default_max_steps": 4}; empty = none):', "");
-  let settings = null;
+  const raw = prompt('Modules map as JSON object of module compartments (e.g. {"opal-say": {"voice_id": "..."}}; empty = none):', "");
+  const body = { name, is_active: confirm("Activate this profile now (local selection only)?") };
   if (raw) {
-    try { settings = JSON.parse(raw); } catch (_) { toast("settings preset must be a JSON object"); return; }
-    if (typeof settings !== "object" || settings === null || Array.isArray(settings)) { toast("settings preset must be a JSON object"); return; }
+    try { body.modules = JSON.parse(raw); } catch (_) { toast("modules must be a JSON object"); return; }
+    if (typeof body.modules !== "object" || body.modules === null || Array.isArray(body.modules)) { toast("modules must be a JSON object"); return; }
   }
-  const body = { name, is_active: confirm("Activate this profile now (applies its preset)?") };
-  if (settings) body.settings = settings;
   try {
     await api("/api/v1/profile/", { method: "POST", headers: { "If-Match": await configEtag() }, body: JSON.stringify(body) });
     toast(`profile ${name} created`, false);
@@ -503,12 +499,11 @@ async function showProfile(id) {
 
 async function editProfile(p) {
   const name = prompt(`Name for profile ${p.id} (blank keeps "${p.name}"):`, "");
-  const raw = prompt('Settings preset JSON (blank keeps current; "{}" clears):', "");
+  const raw = prompt('Patch document as JSON object (e.g. {"description": "..."} or {"modules": {"opal-think": {}}}; blank cancels):', "");
   const body = {};
   if (name) body.name = name;
-  if (raw === "{}") body.settings = null;
-  else if (raw) {
-    try { body.settings = JSON.parse(raw); } catch (_) { toast("settings preset must be a JSON object"); return; }
+  if (raw) {
+    try { Object.assign(body, JSON.parse(raw)); } catch (_) { toast("patch must be a JSON object"); return; }
   }
   if (!Object.keys(body).length) return;
   try {
@@ -520,7 +515,7 @@ async function editProfile(p) {
 }
 
 async function activateProfile(id) {
-  if (!confirm(`Activate profile ${id}? Its settings preset is applied to live settings.`)) return;
+  if (!confirm(`Activate profile ${id}? Local selection only — no settings change.`)) return;
   try {
     const { etag } = await api(`/api/v1/profile/${id}`);
     await api(`/api/v1/profile/${id}/activate`, { method: "POST", headers: { "If-Match": etag }, body: "{}" });

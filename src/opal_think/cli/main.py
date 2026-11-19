@@ -39,20 +39,20 @@ tasks_app = typer.Typer(
     no_args_is_help=True)
 info_app = typer.Typer(help="Service health probe.", no_args_is_help=True)
 service_app = typer.Typer(help="Managed opal-think-svc process lifecycle.", no_args_is_help=True)
-# Canonical x-opal-cli bindings (v1.7.1): `config` parents the portable-configuration
-# groups — setting, persona, profile.
+# Canonical x-opal-cli bindings (v0.1.0): `config` hosts save/load/validate and the
+# `setting` group; `persona` and `profile` are top-level groups.
 config_app = typer.Typer(help="Portable configuration resources.", no_args_is_help=True)
 config_setting_app = typer.Typer(help="Portable service settings (strong-ETag guarded).", no_args_is_help=True)
-config_persona_app = typer.Typer(help="Named assistant personas (shared OPAL identities).", no_args_is_help=True)
-config_profile_app = typer.Typer(help="Named presets of portable operating defaults.", no_args_is_help=True)
+personas_app = typer.Typer(help="Named assistant personas (shared OPAL identities).", no_args_is_help=True)
+profiles_app = typer.Typer(help="Namespaced profiles (shared + module compartments).", no_args_is_help=True)
 config_app.add_typer(config_setting_app, name="setting")
-config_app.add_typer(config_persona_app, name="persona")
-config_app.add_typer(config_profile_app, name="profile")
 think_app.add_typer(sessions_app, name="session")
 think_app.add_typer(models_app, name="model")
 think_app.add_typer(tasks_app, name="task")
 think_app.add_typer(info_app, name="info")
 think_app.add_typer(config_app, name="config")
+think_app.add_typer(personas_app, name="persona")
+think_app.add_typer(profiles_app, name="profile")
 think_app.add_typer(service_app, name="service")
 
 _TERMINAL = {"completed", "failed", "cancelled", "timed_out"}
@@ -222,10 +222,48 @@ def settings_remove(
     typer.echo(f"{key}: reset to default")
 
 
-# -- config profile (named presets of portable defaults) ----------------------------------------------
+# -- profile (kernel v3 namespaced profiles; top-level group) ------------------------------------------
 
 
-@config_profile_app.command("list")
+def _profile_etag(ctx: typer.Context, profile_id: str) -> str:
+    return _call(ctx, "GET", f"/api/v1/profile/{profile_id}").headers["ETag"]
+
+
+def _profile_document(
+    in_file: str | None,
+    name: str | None,
+    description: str | None,
+    is_active: bool | None,
+    shared: str | None,
+    module: str | None,
+) -> dict[str, Any]:
+    """Build the profile document/patch per the kernel ``x-opal-cli`` bindings: ``--in``
+    supplies the whole file (exclusive with the field options); ``--shared``/
+    ``--module`` files feed the ``shared`` section and the own ``opal-think``
+    compartment."""
+    if in_file is not None and any(v is not None for v in (name, description, is_active, shared, module)):
+        typer.echo("error: --in is exclusive with --name/--description/--is-active/--shared/--module", err=True)
+        raise typer.Exit(2)
+    if in_file is not None:
+        return _read_snapshot_file(in_file)
+    body: dict[str, Any] = {}
+    if name is not None:
+        body["name"] = name
+    if description is not None:
+        body["description"] = description
+    if is_active is not None:
+        body["is_active"] = is_active
+    if shared is not None:
+        body["shared"] = _read_snapshot_file(shared)
+    if module is not None:
+        body.setdefault("modules", {})["opal-think"] = _read_snapshot_file(module)
+    return body
+
+
+_PROFILE_IS_ACTIVE = typer.Option(None, "--is-active/--no-is-active", help="Activate this profile locally")
+
+
+@profiles_app.command("list")
 def profile_list(ctx: typer.Context) -> None:
     """List profiles (complete bounded catalog; no pagination)."""
     data = _call(ctx, "GET", "/api/v1/profile/").json()
@@ -234,84 +272,64 @@ def profile_list(ctx: typer.Context) -> None:
         return
     for p in data:
         active = " *active*" if p.get("is_active") else ""
-        settings = json.dumps(p["settings"]) if p.get("settings") else "-"
-        typer.echo(f"{p['id']}  {p['name']}{active}  settings={settings}")
+        modules = ",".join(sorted((p.get("modules") or {}).keys())) or "-"
+        typer.echo(f"{p['id']}  {p['name']}{active}  modules={modules}")
 
 
-def _profile_etag(ctx: typer.Context, profile_id: int) -> str:
-    return _call(ctx, "GET", f"/api/v1/profile/{profile_id}").headers["ETag"]
-
-
-@config_profile_app.command("add")
+@profiles_app.command("add")
 def profile_add(
     ctx: typer.Context,
-    name: str,
-    settings: str = typer.Option(None, "--settings", help="JSON preset of portable setting key -> value pairs"),
+    in_file: str = typer.Option(None, "--in", help="Whole portable profile document (YAML/JSON)"),
+    name: str = typer.Option(None, "--name"),
     description: str = typer.Option(None, "--description"),
-    profile_id: int = typer.Option(None, "--id", help="Client-supplied numeric profile id"),
-    active: bool = typer.Option(False, "--active", help="Make this the active profile (applies the preset)"),
+    is_active: bool | None = _PROFILE_IS_ACTIVE,
+    shared: str = typer.Option(None, "--shared", help="Shared-values object file"),
+    module: str = typer.Option(None, "--module", help="opal-think compartment file"),
+    profile_id: str = typer.Option(None, "--id", help="Client-supplied opaque profile id"),
     if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
 ) -> None:
-    """Create a named preset of portable setting defaults (auto-fetches the config ETag)."""
-    body: dict[str, Any] = {"name": name, "is_active": active}
+    """Add a profile (auto-fetches the config ETag)."""
+    body = _profile_document(in_file, name, description, is_active, shared, module)
     if profile_id is not None:
         body["id"] = profile_id
-    if description is not None:
-        body["description"] = description
-    if settings is not None:
-        try:
-            body["settings"] = json.loads(settings)
-        except ValueError as exc:
-            typer.echo(f"error: --settings must be a JSON object: {exc}", err=True)
-            raise typer.Exit(1) from exc
-        if not isinstance(body["settings"], dict):
-            typer.echo("error: --settings must be a JSON object", err=True)
-            raise typer.Exit(1)
+    if "name" not in body:
+        typer.echo("error: a profile name is required (--name or --in document)", err=True)
+        raise typer.Exit(2)
     etag = if_match or _config_etag(ctx)
     _emit(ctx, _call(ctx, "POST", "/api/v1/profile/", json=body, headers={"If-Match": etag}).json())
 
 
-@config_profile_app.command("show")
-def profile_show(ctx: typer.Context, profile_id: int) -> None:
-    """Show one profile, including all service compartments."""
+@profiles_app.command("show")
+def profile_show(ctx: typer.Context, profile_id: str) -> None:
+    """Show one profile, including all module compartments."""
     _emit(ctx, _call(ctx, "GET", f"/api/v1/profile/{profile_id}").json())
 
 
-@config_profile_app.command("update")
+@profiles_app.command("update")
 def profile_update(
     ctx: typer.Context,
-    profile_id: int,
+    profile_id: str,
+    in_file: str = typer.Option(None, "--in", help="Patch document (YAML/JSON)"),
     name: str = typer.Option(None, "--name"),
     description: str = typer.Option(None, "--description"),
-    settings: str = typer.Option(None, "--settings", help="JSON preset replacing the settings compartment"),
-    active: bool = typer.Option(None, "--active/--inactive", help="Activate (applies preset) / deactivate"),
+    is_active: bool | None = _PROFILE_IS_ACTIVE,
+    shared: str = typer.Option(None, "--shared", help="Shared-values object file"),
+    module: str = typer.Option(None, "--module", help="Partial opal-think compartment file"),
     if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
 ) -> None:
     """Partially update a profile (auto-fetches the config ETag)."""
-    body: dict[str, Any] = {}
-    if name is not None:
-        body["name"] = name
-    if description is not None:
-        body["description"] = description
-    if active is not None:
-        body["is_active"] = active
-    if settings is not None:
-        try:
-            body["settings"] = json.loads(settings)
-        except ValueError as exc:
-            typer.echo(f"error: --settings must be a JSON object: {exc}", err=True)
-            raise typer.Exit(1) from exc
+    body = _profile_document(in_file, name, description, is_active, shared, module)
     if not body:
-        typer.echo("error: nothing to update (pass at least one field option)", err=True)
+        typer.echo("error: nothing to update (pass --in or at least one field option)", err=True)
         raise typer.Exit(1)
     etag = if_match or _profile_etag(ctx, profile_id)
     _emit(ctx, _call(ctx, "PATCH", f"/api/v1/profile/{profile_id}", json=body, headers={"If-Match": etag}).json())
 
 
-@config_profile_app.command("remove")
+@profiles_app.command("remove")
 def profile_remove(
     ctx: typer.Context,
-    profile_id: int,
+    profile_id: str,
     if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
 ) -> None:
     """Remove a profile (409 while it is the active profile; auto-fetches the config ETag)."""
@@ -320,13 +338,14 @@ def profile_remove(
     typer.echo(f"{profile_id}: removed")
 
 
-@config_profile_app.command("activate")
+@profiles_app.command("activate")
 def profile_activate(
     ctx: typer.Context,
-    profile_id: int,
+    profile_id: str,
     if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
 ) -> None:
-    """Make this profile the only active one and apply its settings preset."""
+    """Make this profile the only active one (local selection; empty opal-think
+    compartment means no settings change)."""
     etag = if_match or _profile_etag(ctx, profile_id)
     _emit(ctx, _call(ctx, "POST", f"/api/v1/profile/{profile_id}/activate", headers={"If-Match": etag}).json())
 
@@ -563,7 +582,7 @@ def _persona_etag(ctx: typer.Context, persona_id: str) -> str:
     return _call(ctx, "GET", f"/api/v1/persona/{persona_id}").headers["ETag"]
 
 
-@config_persona_app.command("list")
+@personas_app.command("list")
 def persona_list(
     ctx: typer.Context,
     enabled: bool = typer.Option(None, "--enabled/--disabled", help="Filter by enabled state"),
@@ -579,7 +598,7 @@ def persona_list(
         typer.echo(f"{p['persona_id']}  {p['name']}  enabled={p['enabled']}  voice={voice}")
 
 
-@config_persona_app.command("add")
+@personas_app.command("add")
 def persona_create(
     ctx: typer.Context,
     persona_id: str,
@@ -603,13 +622,13 @@ def persona_create(
         typer.echo(f"persona_id: {data['persona_id']}")
 
 
-@config_persona_app.command("show")
+@personas_app.command("show")
 def persona_show(ctx: typer.Context, persona_id: str) -> None:
     """Show one registered persona."""
     _emit(ctx, _call(ctx, "GET", f"/api/v1/persona/{persona_id}").json())
 
 
-@config_persona_app.command("update")
+@personas_app.command("update")
 def persona_update(
     ctx: typer.Context,
     persona_id: str,
@@ -642,7 +661,7 @@ def persona_update(
     _emit(ctx, _call(ctx, "PATCH", f"/api/v1/persona/{persona_id}", json=body, headers={"If-Match": etag}).json())
 
 
-@config_persona_app.command("remove")
+@personas_app.command("remove")
 def persona_remove(
     ctx: typer.Context,
     persona_id: str,
@@ -654,7 +673,7 @@ def persona_remove(
     typer.echo(f"{persona_id}: removed")
 
 
-@config_persona_app.command("validate")
+@personas_app.command("validate")
 def persona_validate(ctx: typer.Context, persona_id: str) -> None:
     """Check that a persona is registered, enabled, and its bindings resolve."""
     data = _call(ctx, "POST", f"/api/v1/persona/{persona_id}/validate").json()

@@ -24,6 +24,7 @@ from opal_think.deps import get_config, get_settings
 from opal_think.errors import OpalHTTPException
 from opal_think.preconditions import if_match_revision
 from opal_think.schemas import (
+    PROFILE_COMPARTMENT,
     SNAPSHOT_FORMAT_VERSION,
     SNAPSHOT_MODULE,
     SNAPSHOT_RESOURCE_SECTIONS,
@@ -35,7 +36,7 @@ from opal_think.schemas import (
     ConfigValidation,
     OpalValidationIssue,
 )
-from opal_think.settings_registry import RevisionConflict, SettingsRegistry, SettingsStore
+from opal_think.settings_registry import RevisionConflict, SettingsRegistry
 
 router = APIRouter(prefix="/api/v1/config", tags=["config"])
 
@@ -195,10 +196,24 @@ def _validate_snapshot(
             seen_names.add(name)
         if profile.get("is_active"):
             active += 1
-        errors.extend(
-            _issue("invalid_resource", f"{path}.{e['key']}", e["reason"])
-            for e in SettingsStore._preset_errors(profile)
-        )
+        shared = profile.get("shared")
+        if shared:
+            errors.append(_issue("invalid_resource", f"{path}.shared", "'shared' is a closed empty object"))
+        modules = profile.get("modules")
+        if modules is not None and not isinstance(modules, dict):
+            errors.append(_issue("invalid_resource", f"{path}.modules", "modules must be an object"))
+        elif isinstance(modules, dict):
+            for comp, fields in modules.items():
+                if not isinstance(fields, dict):
+                    errors.append(_issue("invalid_resource", f"{path}.modules.{comp}", "compartment must be an object"))
+                elif comp == PROFILE_COMPARTMENT and fields:
+                    errors.append(
+                        _issue(
+                            "invalid_resource",
+                            f"{path}.modules.{comp}",
+                            "the opal-think compartment is a closed empty schema",
+                        )
+                    )
         parsed["profiles"].append(profile)
     if active > 1:
         errors.append(

@@ -1,4 +1,4 @@
-"""CLI ``config profile`` / ``config setting`` / ``config save|load|validate`` over the mock bridge."""
+"""CLI ``profile`` / ``config setting`` / ``config save|load|validate`` over the mock bridge."""
 
 from __future__ import annotations
 
@@ -37,24 +37,32 @@ def api(tmp_path, monkeypatch):
     return test_client
 
 
-def test_profile_lifecycle(api) -> None:
-    result = runner.invoke(
-        cli_main.think_app,
-        ["config", "profile", "add", "studio", "--settings", '{"task.default_max_steps": 4}'],
-    )
+def test_profile_lifecycle(api, tmp_path) -> None:
+    result = runner.invoke(cli_main.think_app, ["profile", "add", "--name", "studio"])
     assert result.exit_code == 0, result.output
-    result = runner.invoke(cli_main.think_app, ["config", "profile", "list"])
+    result = runner.invoke(cli_main.think_app, ["profile", "list"])
     assert "studio" in result.output
-    result = runner.invoke(cli_main.think_app, ["config", "profile", "activate", "1"])
+    result = runner.invoke(cli_main.think_app, ["profile", "activate", "1"])
     assert result.exit_code == 0, result.output
-    assert api.get("/api/v1/setting/task.default_max_steps").json()["value"] == 4
-    result = runner.invoke(cli_main.think_app, ["config", "profile", "remove", "1"])
+    result = runner.invoke(cli_main.think_app, ["profile", "remove", "1"])
     assert result.exit_code != 0  # active profile cannot be deleted
-    result = runner.invoke(cli_main.think_app, ["config", "profile", "update", "1", "--inactive"])
+    result = runner.invoke(cli_main.think_app, ["profile", "update", "1", "--no-is-active"])
     assert result.exit_code == 0, result.output
-    result = runner.invoke(cli_main.think_app, ["config", "profile", "remove", "1"])
+    result = runner.invoke(cli_main.think_app, ["profile", "remove", "1"])
     assert result.exit_code == 0, result.output
     assert api.get("/api/v1/profile/").json() == []
+
+
+def test_profile_add_in_file(api, tmp_path) -> None:
+    """``profile add --in`` binds a whole portable profile document."""
+    doc = tmp_path / "p.json"
+    doc.write_text(json.dumps({"name": "studio", "modules": {"opal-say": {"voice_id": "en-gb"}}}))
+    result = runner.invoke(cli_main.think_app, ["profile", "add", "--in", str(doc)])
+    assert result.exit_code == 0, result.output
+    profile = api.get("/api/v1/profile/").json()[0]
+    assert profile["id"] == "1" and profile["modules"] == {"opal-say": {"voice_id": "en-gb"}}
+    result = runner.invoke(cli_main.think_app, ["profile", "show", "1"])
+    assert result.exit_code == 0
 
 
 def test_setting_set(api) -> None:
