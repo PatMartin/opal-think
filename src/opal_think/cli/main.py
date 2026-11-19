@@ -247,25 +247,6 @@ def settings_remove(
     typer.echo(f"{key}: reset to default")
 
 
-@config_setting_app.command("update")
-def settings_update(
-    ctx: typer.Context,
-    patch: str = typer.Argument(..., help="JSON object of setting key -> value pairs to apply atomically"),
-    if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
-) -> None:
-    """Atomically update several settings (PATCH the collection; auto-fetches the config ETag)."""
-    try:
-        body = json.loads(patch)
-    except ValueError as exc:
-        typer.echo(f"error: patch must be a JSON object: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    if not isinstance(body, dict):
-        typer.echo("error: patch must be a JSON object", err=True)
-        raise typer.Exit(1)
-    etag = if_match or _call(ctx, "GET", "/api/v1/setting/").headers["ETag"]
-    _emit(ctx, _call(ctx, "PATCH", "/api/v1/setting/", json=body, headers={"If-Match": etag}).json())
-
-
 # -- config profile (named presets of portable defaults) ----------------------------------------------
 
 

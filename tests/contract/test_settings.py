@@ -107,38 +107,6 @@ def test_remove_setting_override(client: TestClient) -> None:
     assert body["is_default"] is True and body["value"] == 4
 
 
-def test_patch_settings_atomic(client: TestClient) -> None:
-    # missing If-Match -> 428
-    assert client.patch("/api/v1/setting/", json={"task.max_concurrent": 6}).status_code == 428
-    # stale -> 412
-    assert (
-        client.patch("/api/v1/setting/", json={"task.max_concurrent": 6}, headers={"If-Match": '"s99"'}).status_code
-        == 412
-    )
-    etag = client.get("/api/v1/setting/").headers["ETag"]
-    # reserved key is server-managed -> 422
-    assert (
-        client.patch("/api/v1/setting/", json={"pending_restart_fields": []}, headers={"If-Match": etag}).status_code
-        == 422
-    )
-    # one bad key fails the whole patch (atomicity)
-    bad = client.patch(
-        "/api/v1/setting/",
-        json={"task.max_concurrent": 6, "task.retention_days": "x"},
-        headers={"If-Match": etag},
-    )
-    assert bad.status_code == 422
-    assert client.get("/api/v1/setting/task.max_concurrent").json()["value"] == 4  # not applied
-    good = client.patch(
-        "/api/v1/setting/",
-        json={"task.max_concurrent": 6, "task.retention_days": 7},
-        headers={"If-Match": etag},
-    )
-    assert good.status_code == 200
-    assert good.headers["ETag"].startswith('"s')
-    assert good.json()["task.max_concurrent"] == 6 and good.json()["task.retention_days"] == 7
-
-
 def test_dynamic_provider_key_lifecycle(client: TestClient) -> None:
     # new provider id fields exist by definition; read default
     shown = client.get("/api/v1/setting/providers.myprovider.enabled")
@@ -170,13 +138,18 @@ def test_settings_persist_across_restart(tmp_path) -> None:
         assert c2.get("/api/v1/setting/task.max_concurrent").json()["value"] == 9
 
 
-def test_duplicate_collection_etag_second_write_fails(client: TestClient) -> None:
-    """Same collection ETag used twice: exactly one mutation succeeds (atomic check+write)."""
-    etag = client.get("/api/v1/setting/").headers["etag"]
-    ok = client.patch("/api/v1/setting/", json={"task.max_concurrent": 8}, headers={"If-Match": etag})
+def test_duplicate_key_etag_second_write_fails(client: TestClient) -> None:
+    """Same per-key ETag used twice: exactly one mutation succeeds (atomic check+write)."""
+    etag = client.get("/api/v1/setting/task.max_concurrent").headers["etag"]
+    ok = client.put("/api/v1/setting/task.max_concurrent", json={"value": 8}, headers={"If-Match": etag})
     assert ok.status_code == 200
-    stale = client.patch("/api/v1/setting/", json={"task.max_concurrent": 9}, headers={"If-Match": etag})
+    stale = client.put("/api/v1/setting/task.max_concurrent", json={"value": 9}, headers={"If-Match": etag})
     assert stale.status_code == 412
+
+
+def test_collection_patch_retired(client: TestClient) -> None:
+    """v0.1.0: PATCH /api/v1/setting/ is retired; collection writes go through config load."""
+    assert client.patch("/api/v1/setting/", json={"task.max_concurrent": 6}).status_code in (404, 405)
 
 
 def test_malformed_if_match_rejected(client: TestClient) -> None:
@@ -186,20 +159,6 @@ def test_malformed_if_match_rejected(client: TestClient) -> None:
             client.put("/api/v1/setting/task.max_concurrent", json={"value": 8}, headers={"If-Match": bad}).status_code
             == 422
         ), bad
-        assert (
-            client.patch("/api/v1/setting/", json={"task.max_concurrent": 8}, headers={"If-Match": bad}).status_code
-            == 422
-        ), bad
         assert client.delete("/api/v1/setting/task.max_concurrent", headers={"If-Match": bad}).status_code == 422, bad
 
 
-def test_invalid_patch_writes_nothing(client: TestClient) -> None:
-    """A PATCH mixing a valid and an invalid key changes nothing (atomic validation)."""
-    etag = client.get("/api/v1/setting/").headers["etag"]
-    resp = client.patch(
-        "/api/v1/setting/",
-        json={"task.max_concurrent": 8, "bogus.key": 1},
-        headers={"If-Match": etag},
-    )
-    assert resp.status_code == 422
-    assert client.get("/api/v1/setting/task.max_concurrent").json()["is_default"] is True

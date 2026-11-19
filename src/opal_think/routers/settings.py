@@ -1,9 +1,9 @@
 """Settings endpoints (``/api/v1/setting/`` and ``/api/v1/setting/{key}``).
 
-Portable settings with strong ETags. Collection GET/PATCH use the global revision ETag
+Portable settings with strong ETags. Collection GET uses the global revision ETag
 (``"s<n>"``); single-key GET/PUT/DELETE use the per-key revision ETag (``"k<n>"``).
 Mutations require If-Match: missing -> 428, malformed -> 422, stale -> 412. Unknown keys
--> 404 (single) or 422 (inside a PATCH payload). Secret settings carry secret references,
+-> 404. Secret settings carry secret references,
 never raw values. The collection wire shape is the kernel ``OpalSettingsMap``: a flat
 dotted-key map with ``pending_restart_fields`` as a reserved, server-managed key.
 """
@@ -54,37 +54,6 @@ def _get_or_404(registry: SettingsRegistry, key: str) -> dict[str, Any]:
 
 @router.get("/", operation_id="opal_setting_list", summary="List settings")
 def list_settings(response: Response, registry: SettingsRegistry = Depends(get_settings)) -> dict[str, Any]:
-    settings_map, etag = _map_payload(registry)
-    response.headers["ETag"] = etag
-    return settings_map
-
-
-@router.patch("/", operation_id="opal_setting_patch", summary="Atomically patch settings")
-def patch_settings(
-    request: Request,
-    response: Response,
-    patch: dict[str, Any],
-    registry: SettingsRegistry = Depends(get_settings),
-) -> dict[str, Any]:
-    expected = if_match_revision(request, "s")
-    if "pending_restart_fields" in patch:
-        raise OpalHTTPException(422, "invalid_settings", "pending_restart_fields is a reserved, read-only key")
-    errors = [
-        {"key": key, "reason": reason}
-        for key, value in patch.items()
-        if (reason := registry.validate_value(key, value)) is not None
-    ]
-    if errors:
-        raise OpalHTTPException(422, "invalid_settings", "one or more settings failed validation", details=errors)
-    if patch:
-        try:
-            registry.store.set_many_checked(dict(patch), expect_global=expected)
-        except RevisionConflict as exc:
-            raise OpalHTTPException(
-                412,
-                "precondition_failed",
-                "If-Match does not match the current settings revision; re-read settings and retry",
-            ) from exc
     settings_map, etag = _map_payload(registry)
     response.headers["ETag"] = etag
     return settings_map
