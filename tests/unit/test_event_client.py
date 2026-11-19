@@ -80,12 +80,12 @@ def test_normalize_shell_stdout() -> None:
     from opal_think.event_client import normalize_execution_result
 
     record = {
-        "id": "exec_1", "action_id": "gpu_diagnostics", "status": "succeeded",
+        "id": "exec_1", "action_id": "gpu_diagnostics", "status": "completed",
         "exit_code": 0, "stdout": "GPU0 temp=63C mem=22%", "stderr": "",
         "result": None, "trigger": "manual", "action_revision": "r1",
     }
     out = normalize_execution_result(record)
-    assert out["status"] == "succeeded"
+    assert out["status"] == "completed"
     assert out["stdout"] == "GPU0 temp=63C mem=22%"
     assert out["exit_code"] == 0
     assert "result" not in out  # absent fields are not fabricated
@@ -95,7 +95,7 @@ def test_normalize_http_result_structured() -> None:
     from opal_think.event_client import normalize_execution_result
 
     record = {
-        "id": "e2", "status": "succeeded", "http_status": 200,
+        "id": "e2", "status": "completed", "http_status": 200,
         "result": {"body": {"temp": 63}, "headers": {"x": "y"}},
     }
     out = normalize_execution_result(record)
@@ -127,9 +127,9 @@ def test_normalize_dropped_and_timed_out_reasons() -> None:
 def test_normalize_redacts_secrets_and_bounds_size() -> None:
     from opal_think.event_client import normalize_execution_result
 
-    record = {"id": "e6", "status": "succeeded", "result": {"token": "abc123", "temp": 1}, "stdout": "x" * 5000}
+    record = {"id": "e6", "status": "completed", "result": {"token": "abc123", "temp": 1}, "stdout": "x" * 5000}
     out = normalize_execution_result(record)
     assert out["result"]["token"] == "***"
     assert len(out["stdout"]) < 5000 and out["stdout"].endswith("[truncated]")
-    big = normalize_execution_result({"id": "e7", "status": "succeeded", "result": {"blob": "y" * 6000}})
+    big = normalize_execution_result({"id": "e7", "status": "completed", "result": {"blob": "y" * 6000}})
     assert big["result"]["blob"].endswith("[truncated]")  # per-field bound keeps total under the cap

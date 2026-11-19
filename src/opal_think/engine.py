@@ -496,7 +496,7 @@ class TaskEngine:
                             "External actions are available only as OPAL-EVENT tool calls. "
                             f"Permitted actions: {names}. To act, request a tool call whose arguments are "
                             'an event envelope {"topic": <topic>, "data": {...}}. Never claim an action '
-                            "succeeded until the tool result says so."
+                            "completed until the tool result says so."
                         ),
                     }
                 )
@@ -528,7 +528,7 @@ class TaskEngine:
                     self._emit(task_id, "task.output", {"text": text})
             self._append_step(
                 task_id,
-                {"kind": "reasoning", "summary": f"Reasoning step {step_index} finished", "status": "succeeded", "at": _now()},
+                {"kind": "reasoning", "summary": f"Reasoning step {step_index} finished", "status": "completed", "at": _now()},
             )
             if not tool_calls:
                 return text
@@ -729,7 +729,7 @@ class TaskEngine:
         # Durable receipt FIRST: execution_id + submitted state persist to the task
         # record before any progress event or poll, so no interruption (cancel,
         # timeout, crash) can lose the downstream admission.
-        self._action_step(task_id, action_id, execution_id, action_input, "started", "action submitted to EVENT")
+        self._action_step(task_id, action_id, execution_id, action_input, "running", "action submitted to EVENT")
         self._emit(task_id, "task.action", {"action_id": action_id, "execution_id": execution_id, "summary": "action submitted"})
         while True:
             try:

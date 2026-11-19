@@ -48,7 +48,7 @@ def _script_task(client: TestClient, script: list[Generation], event_client=None
 
 def test_action_round_trip(task_client: TestClient) -> None:
     event = FakeEventClient()
-    event.set_result("gpu_diagnostics", status="succeeded", result={"gpu_temp_c": 63})
+    event.set_result("gpu_diagnostics", status="completed", result={"gpu_temp_c": 63})
     task = _script_task(
         task_client,
         [
@@ -62,7 +62,7 @@ def test_action_round_trip(task_client: TestClient) -> None:
     action_steps = [s for s in task["steps"] if s["kind"] == "action"]
     assert len(action_steps) == 1
     step = action_steps[0]
-    assert step["status"] == "succeeded"
+    assert step["status"] == "completed"
     assert step["action_id"] == "gpu_diagnostics"
     assert step["execution_id"] == "exec_1"
     assert step["action_input"] == {"event": {"topic": "gpu.diag", "data": {"level": 1}}}
@@ -163,7 +163,7 @@ def test_multiple_tool_calls_all_replied(task_client: TestClient) -> None:
     assert task["status"] == "completed"
     assert len(event.calls) == 2
     action_steps = [s for s in task["steps"] if s["kind"] == "action"]
-    assert len(action_steps) == 2 and all(s["status"] == "succeeded" for s in action_steps)
+    assert len(action_steps) == 2 and all(s["status"] == "completed" for s in action_steps)
     # round-2 conversation: assistant turn carrying tool_calls + matching result per call
     round2 = _fake(task_client).calls[-1]["messages"]
     assistant_tool_msg = next(m for m in round2 if m["role"] == "assistant" and m.get("tool_calls"))
@@ -188,7 +188,7 @@ def test_over_limit_calls_get_explicit_errors(task_client: TestClient) -> None:
     assert task["status"] == "completed"
     assert len(event.calls) == 4  # only the bounded four were submitted
     action_steps = [s for s in task["steps"] if s["kind"] == "action"]
-    assert sum(1 for s in action_steps if s["status"] == "succeeded") == 4
+    assert sum(1 for s in action_steps if s["status"] == "completed") == 4
     assert sum(1 for s in action_steps if s["status"] == "failed") == 2
     round2 = _fake(task_client).calls[-1]["messages"]
     tool_msgs = [m for m in round2 if m["role"] == "tool"]
@@ -241,7 +241,7 @@ def test_execution_fields_reach_model(task_client: TestClient) -> None:
     event = FakeEventClient()
     event.set_result(
         "gpu_diagnostics",
-        status="succeeded",
+        status="completed",
         exit_code=0,
         stdout="GPU0 temp=63C",
         stderr="",
@@ -261,7 +261,7 @@ def test_execution_fields_reach_model(task_client: TestClient) -> None:
     import json as _json
 
     payload = _json.loads(tool_msg["content"])
-    assert payload["status"] == "succeeded"
+    assert payload["status"] == "completed"
     assert payload["stdout"] == "GPU0 temp=63C"
     assert payload["exit_code"] == 0
     assert payload["result"] == {"gpu_temp_c": 63}

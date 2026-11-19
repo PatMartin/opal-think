@@ -19,7 +19,7 @@ import httpx
 
 from opal_think.errors import OpalHTTPException
 
-TERMINAL_EXECUTION_STATUSES = {"succeeded", "failed", "timed_out", "dropped"}
+TERMINAL_EXECUTION_STATUSES = {"completed", "failed", "timed_out", "dropped"}
 # The remaining statuses in the released EVENT Execution enum; anything else is a
 # contract violation rather than a reason to keep polling.
 ACTIVE_EXECUTION_STATUSES = {"queued", "running"}
@@ -223,7 +223,7 @@ class FakeEventClient:
     async def get_execution(self, execution_id: str, context: dict[str, str | None]) -> dict[str, Any]:
         call = next((c for c in self.calls if c["execution_id"] == execution_id), None)
         action_id = call["action_id"] if call else "unknown"
-        fields = self.results.get(action_id, {"status": "succeeded", "result": {"ok": True}})
+        fields = self.results.get(action_id, {"status": "completed", "result": {"ok": True}})
         return {"id": execution_id, "action_id": action_id, "trigger": "manual", "created_at": "t", "finished_at": "t", **fields}
 
 

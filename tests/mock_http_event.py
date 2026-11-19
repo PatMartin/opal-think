@@ -8,7 +8,7 @@ consumes (verified against ``opal-event`` @ contract 1.7.1, incl. the caller-sco
 - ``POST /api/v1/action/{action_id}/execute`` body ``{event: {...}}`` -> 202
   ``Execution`` admission record (queued; admission is not outcome)
 - ``GET /api/v1/execution/{execution_id}`` -> 200 ``Execution`` (status enum:
-  queued, running, succeeded, failed, timed_out, dropped)
+  queued, running, completed, failed, timed_out, dropped)
 - errors carry the ``OpalError`` envelope ``{error: {code, message, request_id,
   transaction_id, session_id?, causation_id?}}``; ``X-Opal-*`` context headers are
   echoed and a fresh ``X-Opal-Request-Id`` is minted per hop
@@ -224,7 +224,7 @@ class MockEventApi:
             return self._json(200, {**self._public(record), "status": status}, request)
         terminal = {
             **self._public(record),
-            "status": "succeeded",
+            "status": "completed",
             "result": {"ok": True},
             "finished_at": "2026-01-01T00:00:01Z",
             "duration_ms": 5,

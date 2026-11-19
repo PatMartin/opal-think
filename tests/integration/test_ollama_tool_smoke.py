@@ -64,7 +64,7 @@ DIAGNOSTIC_ACTION = {
     "input_schema": {"type": "object"},
 }
 DIAGNOSTIC_TERMINAL = {
-    "status": "succeeded",
+    "status": "completed",
     "exit_code": 0,
     "stdout": "GPU0 temp=63C",
     "stderr": "",
@@ -210,7 +210,7 @@ def test_live_tool_selection_invocation_interpretation(tmp_path, evidence, trial
         "an answer claiming execution here would be hallucinated, and is not accepted"
     )
     step = action_steps[0]
-    assert step["status"] == "succeeded" and step["execution_id"] == invoked[0]["execution_id"]
+    assert step["status"] == "completed" and step["execution_id"] == invoked[0]["execution_id"]
     # Result interpretation: the terminal execution fields reached the final answer.
     assert task["answer"].strip(), "model produced no final answer after the tool result"
     assert "63" in task["answer"], (

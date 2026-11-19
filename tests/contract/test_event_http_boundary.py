@@ -27,7 +27,7 @@ from tests.mock_http_event import MockEventApi
 
 # Parity constants derived from released opal_event.1.4.0.yaml:
 #   Execution.required = [id, action_id, status, trigger, created_at]
-#   Execution.status enum = queued | running | succeeded | failed | timed_out | dropped
+#   Execution.status enum = queued | running | completed | failed | timed_out | dropped
 #   ActionList = array of Action
 #   OpalError.error.required = [code, message, request_id, transaction_id]
 EXECUTION_SCHEMA = {
@@ -36,7 +36,7 @@ EXECUTION_SCHEMA = {
     "properties": {
         "id": {"type": "string", "minLength": 1},
         "action_id": {"type": "string", "minLength": 1},
-        "status": {"enum": ["queued", "running", "succeeded", "failed", "timed_out", "dropped"]},
+        "status": {"enum": ["queued", "running", "completed", "failed", "timed_out", "dropped"]},
         "trigger": {"enum": ["rule", "manual"]},
         "created_at": {"type": "string"},
     },
@@ -99,11 +99,11 @@ def _diag_call(*, topic: str = "gpu.diag", data: dict | None = None) -> ToolCall
 
 
 def test_round_trip_over_http_boundary(task_client: TestClient) -> None:
-    """202 admission -> poll queued->running->succeeded; stdout/result reach model turn 2."""
+    """202 admission -> poll queued->running->completed; stdout/result reach model turn 2."""
     api = MockEventApi()
     api.set_terminal(
         "gpu_diagnostics",
-        status="succeeded",
+        status="completed",
         exit_code=0,
         stdout="GPU0 temp=63C",
         stderr="",
@@ -119,7 +119,7 @@ def test_round_trip_over_http_boundary(task_client: TestClient) -> None:
     )
     assert task["status"] == "completed" and task["answer"] == "GPU temperature is 63C"
     step = next(s for s in task["steps"] if s["kind"] == "action")
-    assert step["status"] == "succeeded" and step["execution_id"] == "exec_1"
+    assert step["status"] == "completed" and step["execution_id"] == "exec_1"
     # the wire exchange actually happened: list -> execute -> polls to terminal
     assert [r["path"] for r in api.requests] == [
         "/api/v1/action/",
@@ -130,7 +130,7 @@ def test_round_trip_over_http_boundary(task_client: TestClient) -> None:
     post = _requests(api, "POST", "/api/v1/action/")[0]
     assert post["json"] == {"event": {"topic": "gpu.diag", "data": {"level": 1}}}
     payload = json.loads(_tool_msg(task_client)["content"])
-    assert payload["status"] == "succeeded"
+    assert payload["status"] == "completed"
     assert payload["stdout"] == "GPU0 temp=63C"
     assert payload["exit_code"] == 0
     assert payload["result"] == {"gpu_temp_c": 63}
@@ -161,7 +161,7 @@ def test_fixture_parity_with_released_event_contract(task_client: TestClient) ->
     for poll in polls:
         assert poll["status"] == 200
         jsonschema.validate(poll["response_json"], EXECUTION_SCHEMA)
-    assert polls[-1]["response_json"]["status"] in {"succeeded", "failed", "timed_out", "dropped"}
+    assert polls[-1]["response_json"]["status"] in {"completed", "failed", "timed_out", "dropped"}
     # error path emits the OpalError envelope
     error = api.handler(httpx.Request("POST", "http://event.test/api/v1/action/nope/execute", json={"event": {}}))
     assert error.status_code == 404

@@ -114,7 +114,7 @@ def test_allowlist_permits_and_advertises(task_client: TestClient) -> None:
     assert "gpu_diagnostics" in hint and "remove_gpu_driver" not in hint
     assert [c["action_id"] for c in event.calls] == ["gpu_diagnostics"]
     step = next(s for s in task["steps"] if s["kind"] == "action")
-    assert step["status"] == "succeeded" and step["execution_id"]
+    assert step["status"] == "completed" and step["execution_id"]
 
 
 def test_action_outside_allowlist_rejected(task_client: TestClient) -> None:

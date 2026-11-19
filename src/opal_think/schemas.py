@@ -101,7 +101,7 @@ class TaskStep(BaseModel):
     action_id: str | None = None
     execution_id: str | None = None
     action_input: dict[str, Any] | None = None
-    status: Literal["started", "succeeded", "failed", "timed_out", "dropped", "cancelled"]
+    status: Literal["running", "completed", "failed", "timed_out", "dropped", "cancelled"]
     at: datetime
 
 

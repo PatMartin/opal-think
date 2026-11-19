@@ -164,12 +164,12 @@ async def test_two_turn_tool_conversation_ordering() -> None:
     assert len(turn1.tool_calls) == 1
     # engine flow: assistant tool_calls turn, then one tool result per call
     messages.append(adapter.tool_call_message(turn1, turn1.tool_calls))
-    messages.append(adapter.tool_result_message(turn1.tool_calls[0], '{"status":"succeeded","stdout":"GPU0 temp=63C"}'))
+    messages.append(adapter.tool_result_message(turn1.tool_calls[0], '{"status":"completed","stdout":"GPU0 temp=63C"}'))
     turn2 = await adapter.generate("gpt-x", messages, tools=_TOOLS)
     assert turn2.text == "The GPU reads 63C."
     sent = bodies[1]["messages"]
     assert sent[-2]["role"] == "assistant" and sent[-2]["tool_calls"][0]["id"] == "call_1"
-    assert sent[-1] == {"role": "tool", "tool_call_id": "call_1", "content": '{"status":"succeeded","stdout":"GPU0 temp=63C"}'}
+    assert sent[-1] == {"role": "tool", "tool_call_id": "call_1", "content": '{"status":"completed","stdout":"GPU0 temp=63C"}'}
 
 
 async def test_generate_multiple_tool_calls_keep_ids() -> None:

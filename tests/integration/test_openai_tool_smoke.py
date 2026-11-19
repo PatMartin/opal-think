@@ -74,7 +74,7 @@ DIAGNOSTIC_ACTION = {
     "input_schema": {"type": "object"},
 }
 DIAGNOSTIC_TERMINAL = {
-    "status": "succeeded",
+    "status": "completed",
     "exit_code": 0,
     "stdout": "GPU0 temp=63C",
     "stderr": "",
@@ -199,7 +199,7 @@ def test_live_tool_two_turn_invocation(tmp_path, evidence, trial) -> None:
     assert invoked and invoked[0]["action_id"] == "read_gpu_temperature", (
         "no real execution reached EVENT — a 'done' answer here would be hallucinated"
     )
-    assert action_steps[0]["status"] == "succeeded" and action_steps[0]["execution_id"] == invoked[0]["execution_id"]
+    assert action_steps[0]["status"] == "completed" and action_steps[0]["execution_id"] == invoked[0]["execution_id"]
     assert task["answer"].strip() and "63" in task["answer"], (
         f"tool result (GPU0 temp=63C) not reflected in answer: {task['answer'][:160]!r}"
     )

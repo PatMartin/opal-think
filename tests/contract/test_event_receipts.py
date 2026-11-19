@@ -81,12 +81,12 @@ def test_receipt_persisted_before_poll_then_completed(task_client: TestClient) -
     mid = task_client.get(f"/api/v1/task/{task_id}").json()
     in_flight = [s for s in mid["steps"] if s.get("execution_id") == execution_id]
     assert in_flight, f"no receipt recorded mid-poll: {mid['steps']}"
-    assert in_flight[0]["status"] == "started" and in_flight[0]["kind"] == "action"
+    assert in_flight[0]["status"] == "running" and in_flight[0]["kind"] == "action"
     task = _wait_terminal(task_client, task_id)
     assert task["status"] == "completed"
     steps = _action_steps(task)
     assert len(steps) == 1 and steps[0]["execution_id"] == execution_id
-    assert steps[0]["status"] == "succeeded"
+    assert steps[0]["status"] == "completed"
 
 
 def test_lost_response_retries_once_single_admission(task_client: TestClient) -> None:
@@ -113,7 +113,7 @@ def test_lost_response_retries_once_single_admission(task_client: TestClient) ->
     assert posts[0]["json"] == posts[1]["json"]  # byte-identical payload
     assert len(api.executions) == 1, f"lost response produced {len(api.executions)} admissions"
     step = _action_steps(task)[0]
-    assert step["execution_id"] == next(iter(api.executions)) and step["status"] == "succeeded"
+    assert step["execution_id"] == next(iter(api.executions)) and step["status"] == "completed"
 
 
 def test_4xx_rejection_is_not_retried(task_client: TestClient) -> None:
@@ -192,7 +192,7 @@ def test_restart_surfaces_durable_receipt(task_client: TestClient) -> None:
     # message text and, structurally, by the retained action step's execution_id.
     assert execution_id in task["error"]["message"] and "not rolled back" in task["error"]["message"]
     step = _action_steps(task)[0]
-    assert step["execution_id"] == execution_id and step["status"] == "started"
+    assert step["execution_id"] == execution_id and step["status"] == "running"
     # durable store keeps the link as a field too (operator access)
     assert task_client.app.state.store.get_task(task_id)["error"]["event_execution_id"] == execution_id
 

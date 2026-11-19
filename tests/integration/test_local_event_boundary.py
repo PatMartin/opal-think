@@ -303,12 +303,12 @@ def test_think_task_end_to_end_with_watcher(think_client: TestClient, event_serv
     watcher.join(timeout=10)
     assert task and task["status"] == "completed", f"task failed: {task and task['error']}"
     steps = [s for s in task["steps"] if s["kind"] == "action"]
-    assert steps and steps[0]["action_id"] == ACTION and steps[0]["status"] == "succeeded"
+    assert steps and steps[0]["action_id"] == ACTION and steps[0]["status"] == "completed"
     execution_id = steps[0]["execution_id"]
     assert execution_id, "no durable receipt recorded"
     # Receipt is retrievable from live EVENT with the scoped token.
     receipt = httpx.get(f"{EVENT}/api/v1/execution/{execution_id}", headers=_think_headers(event_server), timeout=10.0)
-    assert receipt.status_code == 200 and receipt.json()["status"] == "succeeded", receipt.text[:300]
+    assert receipt.status_code == 200 and receipt.json()["status"] == "completed", receipt.text[:300]
     # Exactly one admission for this call.
     after = httpx.get(f"{EVENT}/api/v1/execution/", headers=_think_headers(event_server), timeout=10.0).json()
     after_items = after if isinstance(after, list) else after.get("items", [])

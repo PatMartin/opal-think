@@ -146,7 +146,7 @@ def test_live_full_interop_grounded_answer(tmp_path, evidence) -> None:
     assert task["status"] == "completed", f"task failed: {task['error']}"
     steps = [s for s in task["steps"] if s["kind"] == "action"]
     assert steps and steps[0]["action_id"] == ACTION, f"no real action step: {task['steps']}"
-    assert steps[0]["status"] == "succeeded" and steps[0]["execution_id"], "action did not reach terminal success"
+    assert steps[0]["status"] == "completed" and steps[0]["execution_id"], "action did not reach terminal success"
     assert steps[0]["action_input"]["event"]["data"] is not None, "action input not recorded"
     assert task["answer"].strip(), "no grounded final answer"
     # deadline honored: task finished within its timeout

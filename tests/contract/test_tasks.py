@@ -58,7 +58,7 @@ def test_task_completes_with_answer(task_client: TestClient) -> None:
     assert task["finished_at"]
     assert task["steps_completed"] >= 1
     assert task["steps"][0]["kind"] == "reasoning"
-    assert task["steps"][0]["status"] == "succeeded"
+    assert task["steps"][0]["status"] == "completed"
 
 
 def test_create_task_session_not_found(task_client: TestClient) -> None:
