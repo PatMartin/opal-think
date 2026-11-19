@@ -585,7 +585,7 @@ def _persona_etag(ctx: typer.Context, persona_id: str) -> str:
 @personas_app.command("list")
 def persona_list(
     ctx: typer.Context,
-    enabled: bool = typer.Option(None, "--enabled/--disabled", help="Filter by enabled state"),
+    enabled: bool = typer.Option(None, "--enabled/--no-enabled", help="Filter by enabled state"),
 ) -> None:
     """List registered personas (complete bounded catalog; no pagination)."""
     params = {} if enabled is None else {"enabled": enabled}
@@ -601,15 +601,15 @@ def persona_list(
 @personas_app.command("add")
 def persona_create(
     ctx: typer.Context,
-    persona_id: str,
+    persona_id: str = typer.Option(..., "--persona-id", help="Globally unique OPAL persona identifier"),
     name: str = typer.Option(..., "--name", help="Human-readable persona name"),
     description: str = typer.Option(None, "--description", help="Optional character notes"),
     voice_id: str = typer.Option(None, "--voice-id", help="OPAL Say voice binding"),
-    disabled: bool = typer.Option(False, "--disabled", help="Create disabled (default: enabled)"),
+    enabled: bool = typer.Option(True, "--enabled/--no-enabled", help="Create enabled (default) or disabled"),
     if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
 ) -> None:
     """Register a persona (auto-fetches the configuration ETag)."""
-    body: dict[str, Any] = {"persona_id": persona_id, "name": name, "enabled": not disabled}
+    body: dict[str, Any] = {"persona_id": persona_id, "name": name, "enabled": enabled}
     if description is not None:
         body["description"] = description
     if voice_id is not None:
@@ -637,7 +637,7 @@ def persona_update(
     voice_id: str = typer.Option(None, "--voice-id", help="Rebind to a different OPAL Say voice"),
     clear_description: bool = typer.Option(False, "--clear-description", help="Set description to null"),
     clear_voice: bool = typer.Option(False, "--clear-voice", help="Remove the voice binding"),
-    enabled: bool = typer.Option(None, "--enabled/--disabled", help="Set enabled state"),
+    enabled: bool = typer.Option(None, "--enabled/--no-enabled", help="Set enabled state"),
     if_match: str = typer.Option(None, "--if-match", help="ETag precondition (default: auto-fetched)"),
 ) -> None:
     """Partially update a persona (auto-fetches the configuration ETag)."""

@@ -46,7 +46,7 @@ def test_info_health(api) -> None:
 def test_persona_lifecycle(api) -> None:
     create = runner.invoke(
         cli_main.think_app,
-        ["persona", "add", "amy", "--name", "Amy", "--voice-id", "en-gb-alan-low"],
+        ["persona", "add", "--persona-id", "amy", "--name", "Amy", "--voice-id", "en-gb-alan-low"],
     )
     assert create.exit_code == 0, create.output
     assert api.get("/api/v1/persona/amy").status_code == 200
@@ -70,14 +70,14 @@ def test_persona_lifecycle(api) -> None:
 
 
 def test_persona_update_requires_a_field(api) -> None:
-    runner.invoke(cli_main.think_app, ["persona", "add", "amy", "--name", "Amy"])
+    runner.invoke(cli_main.think_app, ["persona", "add", "--persona-id", "amy", "--name", "Amy"])
     result = runner.invoke(cli_main.think_app, ["persona", "update", "amy"])
     assert result.exit_code == 1
     assert "nothing to update" in result.output
 
 
 def test_persona_validate(api) -> None:
-    runner.invoke(cli_main.think_app, ["persona", "add", "amy", "--name", "Amy", "--disabled"])
+    runner.invoke(cli_main.think_app, ["persona", "add", "--persona-id", "amy", "--name", "Amy", "--no-enabled"])
     result = runner.invoke(cli_main.think_app, ["persona", "validate", "amy"])
     assert result.exit_code == 1
     assert "disabled" in result.output
