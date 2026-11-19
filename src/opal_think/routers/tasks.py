@@ -204,6 +204,9 @@ async def watch_task(
 @router.post("/{task_id}/cancel", status_code=202, operation_id="cancel_task", summary="Request task cancellation")
 def cancel_task(
     task_id: str = TaskId,
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key", min_length=1, max_length=128
+    ),
     engine: TaskEngine = Depends(get_engine),
     store: ThinkStore = Depends(get_store),
 ) -> Task:

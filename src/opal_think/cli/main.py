@@ -444,8 +444,9 @@ def _await_task(ctx: typer.Context, task_id: str, timeout: float = 300.0) -> dic
         time.sleep(0.5)
 
 
-@tasks_app.command("create")
-def task_create(
+@tasks_app.command("add")
+@tasks_app.command("create", hidden=True)
+def task_add(
     ctx: typer.Context,
     prompt: str,
     model: str = typer.Option(None, "--model", help="Model id (e.g. ollama:llama3.2)"),
@@ -692,7 +693,7 @@ def ask(
 ) -> None:
     """Stateless one-shot: create one task, stream it, print the answer.
 
-    Shortcut for `task create` + `task watch`. No session is created unless
+    Shortcut for `task add` + `task watch`. No session is created unless
     --session-id names an existing session to serialize the turn into.
     """
     body: dict[str, Any] = {"prompt": prompt}
