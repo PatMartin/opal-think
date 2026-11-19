@@ -55,16 +55,12 @@ def test_profile_lifecycle(api) -> None:
     assert api.get("/api/v1/profile/").json() == []
 
 
-def test_setting_update(api) -> None:
-    result = runner.invoke(
-        cli_main.think_app,
-        ["config", "setting", "update", '{"task.max_concurrent": 6, "task.retention_days": 10}'],
-    )
-    assert result.exit_code == 0, result.output
+def test_setting_set(api) -> None:
+    for key, value in (("task.max_concurrent", "6"), ("task.retention_days", "10")):
+        result = runner.invoke(cli_main.think_app, ["config", "setting", "set", key, value])
+        assert result.exit_code == 0, result.output
     assert api.get("/api/v1/setting/task.max_concurrent").json()["value"] == 6
     assert api.get("/api/v1/setting/task.retention_days").json()["value"] == 10
-    result = runner.invoke(cli_main.think_app, ["config", "setting", "update", "not json"])
-    assert result.exit_code != 0
 
 
 def test_backup_export_and_validate(api) -> None:

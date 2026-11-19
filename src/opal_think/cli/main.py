@@ -36,7 +36,7 @@ tasks_app = typer.Typer(
     help="Task lifecycle: create submits work, list/show inspect it, watch streams it to a terminal state, "
     "cancel requests cooperative cancellation. `ask` and `chat` are shortcuts over this same lifecycle.",
     no_args_is_help=True)
-info_app = typer.Typer(help="Service identity, version and health probes.", no_args_is_help=True)
+info_app = typer.Typer(help="Service health probe.", no_args_is_help=True)
 backup_app = typer.Typer(help="Portable configuration export, archives and restore.", no_args_is_help=True)
 service_app = typer.Typer(help="Managed opal-think-svc process lifecycle.", no_args_is_help=True)
 # Canonical x-opal-cli bindings (v1.7.1): `config` parents the portable-configuration
@@ -139,30 +139,6 @@ def health(ctx: typer.Context) -> None:
     _emit(ctx, _call(ctx, "GET", "/api/v1/health/").json())
 
 
-@info_app.command("live")
-def live(ctx: typer.Context) -> None:
-    """Liveness probe (process serving)."""
-    _emit(ctx, _call(ctx, "GET", "/api/v1/health/live").json())
-
-
-@info_app.command("ready")
-def ready(ctx: typer.Context) -> None:
-    """Readiness probe (a usable model is configured and available)."""
-    _emit(ctx, _call(ctx, "GET", "/api/v1/health/ready").json())
-
-
-@info_app.command("version")
-def version(ctx: typer.Context) -> None:
-    """Service identity: implementation name, package and contract versions."""
-    _emit(ctx, _call(ctx, "GET", "/api/v1/info/").json())
-
-
-@info_app.command("ping")
-def ping(ctx: typer.Context) -> None:
-    """Lightweight liveness probe for process supervisors."""
-    _emit(ctx, _call(ctx, "GET", "/api/v1/info/ping").json())
-
-
 @think_app.command("gui")
 def gui(ctx: typer.Context) -> None:
     """Open the SPA in a browser (served by the running service at its base URL)."""
@@ -170,7 +146,7 @@ def gui(ctx: typer.Context) -> None:
 
     state = _state(ctx)
     try:
-        state.client.get("/api/v1/info/ping", timeout=2.0)
+        state.client.get("/api/v1/health/live", timeout=2.0)
     except ApiCallError:
         typer.echo(
             f"service unreachable at {state.client.base_url}; start it with `opal think service start`",

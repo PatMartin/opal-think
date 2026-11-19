@@ -23,7 +23,7 @@ from opal_think.errors import OpalHTTPException
 from opal_think.event_client import build_event_client
 from opal_think.opal_context import OpalContextMiddleware, get_opal_context
 from opal_think.providers.registry import ProviderRegistry
-from opal_think.routers import backup, health, info, models, personas, profiles, service, sessions, settings, tasks
+from opal_think.routers import backup, health, models, personas, profiles, service, sessions, settings, tasks
 from opal_think.settings_registry import SettingsRegistry, SettingsStore
 from opal_think.store import ThinkStore
 
@@ -120,7 +120,6 @@ def create_app(config: ThinkConfig | None = None) -> FastAPI:
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
     app.include_router(health.router, dependencies=[Depends(require_auth)])
-    app.include_router(info.router, dependencies=[Depends(require_auth)])
     app.include_router(settings.router, dependencies=[Depends(require_auth)])
     app.include_router(sessions.router, dependencies=[Depends(require_auth)])
     app.include_router(models.router, dependencies=[Depends(require_auth)])

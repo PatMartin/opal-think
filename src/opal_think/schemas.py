@@ -223,24 +223,6 @@ class HealthProbe(BaseModel):
     details: dict[str, Any] | None = None
 
 
-# -- service info (kernel ``info`` / ``info_ping`` path items) -------------------------------------------
-
-
-class ServiceInfo(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    version: str
-    api_version: str
-    description: str | None = None
-
-
-class LivenessRead(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: Literal["ok"] = "ok"
-
-
 class OpalValidationReport(BaseModel):
     """Kernel ``OpalValidationReport``: ``valid`` plus service-defined diagnostics."""
 

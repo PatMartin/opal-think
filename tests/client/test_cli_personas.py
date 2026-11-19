@@ -37,17 +37,10 @@ def api(tmp_path, monkeypatch):
     return test_client
 
 
-def test_version(api) -> None:
-    result = runner.invoke(cli_main.think_app, ["info", "version"])
+def test_info_health(api) -> None:
+    result = runner.invoke(cli_main.think_app, ["--json", "info", "health"])
     assert result.exit_code == 0, result.output
-    body = json.loads(result.output)
-    assert body["name"] == "opal-think-svc" and body["api_version"] == "0.1.0"
-
-
-def test_ping(api) -> None:
-    result = runner.invoke(cli_main.think_app, ["info", "ping"])
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output) == {"status": "ok"}
+    assert json.loads(result.output)["status"] in ("ok", "degraded", "unavailable")
 
 
 def test_persona_lifecycle(api) -> None:
