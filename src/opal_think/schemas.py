@@ -1,4 +1,4 @@
-"""Pydantic models mirroring ``openapi/opal_think_v0.1.0.yaml`` component schemas.
+"""Pydantic models mirroring ``openapi/opal_think_v0.5.0.yaml`` component schemas.
 
 The OpenAPI contract is authoritative; these models implement it exactly:
 ``additionalProperties: false`` maps to ``extra="forbid"``, required fields are non-defaulted,

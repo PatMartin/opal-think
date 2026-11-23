@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: OPAL Think API
-  version: '0.1.0'
+  version: '0.5.0'
   description: |
     OPAL-THINK is a model-neutral, guarded reasoning service. The OpenAPI contract is authoritative; CLI and SPA only call REST.
 
@@ -116,13 +116,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/TooManyRequests'
         '503':
           $ref: './shared/opal_kernel.yaml#/components/responses/ServiceUnavailable'
-      x-opal-cli:
-        group: task
-        command: add
-        aliases:
-        - create
-        - ask
-        - chat
     get:
       tags:
       - tasks
@@ -159,9 +152,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        group: task
-        command: list
   /api/v1/task/{task_id}:
     parameters:
     - $ref: '#/components/parameters/TaskId'
@@ -201,9 +191,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        group: task
-        command: show
   /api/v1/task/{task_id}/stream:
     parameters:
     - $ref: '#/components/parameters/TaskId'
@@ -256,9 +243,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        group: task
-        command: watch
   /api/v1/task/{task_id}/cancel:
     parameters:
     - $ref: '#/components/parameters/TaskId'
@@ -303,9 +287,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/Conflict'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        group: task
-        command: cancel
   /api/v1/session/:
     parameters:
     - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
@@ -353,9 +334,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
         '429':
           $ref: './shared/opal_kernel.yaml#/components/responses/TooManyRequests'
-      x-opal-cli:
-        group: session
-        command: add
     get:
       tags:
       - sessions
@@ -387,9 +365,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/Forbidden'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        group: session
-        command: list
   /api/v1/session/{session_id}:
     parameters:
     - $ref: '#/components/parameters/SessionId'
@@ -427,9 +402,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        group: session
-        command: show
     delete:
       tags:
       - sessions
@@ -460,9 +432,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/Conflict'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        group: session
-        command: remove
   /api/v1/model/:
     parameters:
     - $ref: './shared/opal_kernel.yaml#/components/parameters/OpalSessionIdParameter'
@@ -503,9 +472,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
         '503':
           $ref: './shared/opal_kernel.yaml#/components/responses/ServiceUnavailable'
-      x-opal-cli:
-        group: model
-        command: list
   /api/v1/model/{model_id}:
     parameters:
     - $ref: '#/components/parameters/ModelId'
@@ -544,9 +510,6 @@ paths:
           $ref: './shared/opal_kernel.yaml#/components/responses/NotFound'
         '422':
           $ref: './shared/opal_kernel.yaml#/components/responses/UnprocessableEntity'
-      x-opal-cli:
-        group: model
-        command: show
   /api/v1/profile/:
     $ref: './shared/opal_kernel.yaml#/components/pathItems/profiles_collection'
   /api/v1/profile/{profile_id}:
@@ -976,55 +939,8 @@ components:
       - description
       description: Models are discovered from configured provider adapters, not installed or deleted via this REST
         API.
-x-opal-cli-commands:
-  ask: alias of `task add` (POST /api/v1/task/ + watch/show)
-  chat: alias of `task add` bound to a session (session add, optional initial, + POST /api/v1/task/
-    per turn)
-  task:
-  - add
-  - list
-  - show
-  - watch
-  - cancel
-  session:
-  - add
-  - remove
-  - list
-  - show
-  model:
-  - list
-  - show
-  profile:
-  - list
-  - add
-  - show
-  - update
-  - remove
-  - activate
-  config:
-  - save
-  - load
-  - validate
-  config setting:
-  - list
-  - show
-  - set
-  - remove
-  persona:
-  - list
-  - add
-  - show
-  - update
-  - remove
-  - validate
-  info:
-  - health
-  service:
-  - start
-  - stop
-  - log
-x-opal-event-integration:
-  source_contract: https://github.com/PatMartin/opal-api/blob/main/openapi/opal_event.yaml
+x-opal-bus-integration:
+  source_contract: https://github.com/PatMartin/opal-api/blob/main/openapi/opal_bus.yaml
   actions_discovery: GET /api/v1/action/
   action_lookup: GET /api/v1/action/{action_id}
   execute: POST /api/v1/action/{action_id}/execute

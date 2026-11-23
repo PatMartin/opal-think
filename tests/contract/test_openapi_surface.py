@@ -92,4 +92,4 @@ def test_generated_openapi_parses_and_reports(client: TestClient) -> None:
     spec = _generated(client)
     assert spec["openapi"].startswith("3.1") or spec["openapi"].startswith("3.0")
     assert spec["info"]["title"] == "OPAL Think API"
-    assert spec["info"]["version"] == "0.1.0"
+    assert spec["info"]["version"] == "0.5.0"

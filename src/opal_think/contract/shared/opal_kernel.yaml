@@ -4,7 +4,7 @@
 openapi: 3.1.0
 info:
   title: OPAL Suite Kernel
-  version: '0.1.0'
+  version: '0.5.0'
   description: 'Shared contract kernel for the OPAL suite (SUITE STANDARD v3.0.0).
 
 
@@ -56,53 +56,6 @@ x-opal-event-envelope:
     (topic + JSON with topic/data) is unchanged across versions. Consumers extract known correlation keys (session_id,
     transaction_id, request_id, causation_id) and MUST ignore unknown metadata fields; producers may emit any metadata_schema_version
     without breaking the wire contract.
-x-opal-cli-format:
-  version: '1.0'
-  description: Canonical CLI binding for OPAL operations. Every annotated operation maps to one canonical
-    command `opal <service> [parent] [group] <command>`; `aliases` names alternate complete spellings that dispatch
-    to the same operation (e.g. Think's `ask`/`chat`/`create` invoke `task add`). Kernel Path Items carry
-    per-operation descriptors directly and are the single source of truth for shared-operation bindings,
-    including all `config`/`config setting`, `info`, `service`, `profile`, and `persona` commands.
-    Readers hoist
-    a path-level
-    per-method map onto each
-    operation for module-declared mounts; both forms carry the same descriptor shape.
-  descriptor:
-    command: required - canonical verb, kebab-case (`list`, `add`, `show`, `update`, `remove`, `save`,
-      `load`, `validate`, ...)
-    group: optional - command group (`task`, `persona`, `setting`, `info`, ...)
-    parent: optional - super-group above `group` (`config`, `data`)
-    aliases: optional - array of alternate complete command spellings for this operation
-    options: optional - array of named-option descriptors; each carries `flag` (long option spelling),
-      `value` (metavar such as NAME/VALUE/FILE), `required` (default false), optional `description`, and
-      `binds` describing how the option feeds the REST call - `{kind, target, parse?}` with kind `path` |
-      `query` | `body` | `header` | `local_in` | `local_out`.
-  placement:
-    operation: '`x-opal-cli: <descriptor>`'
-    path_item: '`x-opal-cli: {<method>: <descriptor>}` - for module-declared bindings on a `$ref`-mounted
-      path item (an extension beside `$ref` cannot inject into operations defined in another document).
-      Kernel-owned Path Items use the operation form instead.'
-  local_file_options:
-    local_in: The CLI reads and parses a client-local file, then submits the parsed object in the request
-      body at `target`. The service never sees the client filename. For snapshot operations, `.yaml`/`.yml`
-      select YAML parsing and `.json` selects JSON; other extensions are client errors, never server errors.
-      Profile operations use the same convention for nested structured input - `--in FILE` targets the
-      whole request body (the portable profile document or patch document), `--shared FILE` targets
-      `shared`, and `--module FILE` targets `modules.<module-key>`, a placeholder the receiving
-      service substitutes with its own declared compartment key
-      (`x-opal-profile-namespace.compartment`) when generating commands, so a published binding
-      reads e.g. `modules.opal-say` on opal-say.
-    local_out: The CLI writes the named response field to a client-local file, serialized as YAML for
-      `.yaml`/`.yml` or JSON for `.json`; other extensions are client errors. The service never sees the
-      client filename. For `config save`, `--out FILE` also switches request `destination` to `response`
-      so no managed snapshot is written.
-    parse_json_or_string: For `config setting set --value`, the CLI parses the argument as JSON first; valid
-      JSON becomes the native JSON value, otherwise the exact string is sent. JSON `null` is a nullable
-      value, never a deletion instruction.
-  example:
-    parent: config
-    group: persona
-    command: list
 x-opal-persona:
   version: '1.0'
   description: >-
@@ -669,7 +622,7 @@ components:
           additionalProperties: true
           description: 'Module-defined diagnostics, always present (empty object when a module reports no
             extra diagnostics). Each module declares its known members via its `x-opal-health-details`
-            extension: `stats` carries opal-event''s event and execution counters; `audio_devices` carries
+            extension: `stats` carries opal-bus''s event and execution counters; `audio_devices` carries
             opal-listen''s host input device list. Diagnostics that older revisions returned at the top
             level (`engines`, `checks`, `components`, `metrics`, `models_available`, `broker_running`,
             `database_ready`, `event`, `active_tasks`) now live under this object with their existing
@@ -1146,8 +1099,8 @@ components:
     OpalProfileModules:
       type: object
       properties:
-        opal-event:
-          $ref: '#/components/schemas/OpalEventProfileNamespace'
+        opal-bus:
+          $ref: '#/components/schemas/OpalBusProfileNamespace'
         opal-listen:
           $ref: '#/components/schemas/OpalListenProfileNamespace'
         opal-look:
@@ -1171,8 +1124,8 @@ components:
     OpalProfileModulesPatch:
       type: object
       properties:
-        opal-event:
-          $ref: '#/components/schemas/OpalEventProfileNamespacePatch'
+        opal-bus:
+          $ref: '#/components/schemas/OpalBusProfileNamespacePatch'
         opal-listen:
           $ref: '#/components/schemas/OpalListenProfileNamespacePatch'
         opal-look:
@@ -1382,16 +1335,16 @@ components:
       additionalProperties: false
       description: Patch form of the opal-think compartment. No fields are declared; any member is
         rejected until a declared field exists.
-    OpalEventProfileNamespace:
+    OpalBusProfileNamespace:
       type: object
       additionalProperties: false
-      description: 'opal-event compartment. Event currently declares no profile-specific defaults; this
+      description: 'opal-bus compartment. Bus currently declares no profile-specific defaults; this
         is an explicit empty closed schema so the compartment is registered, validated and
         round-tripped.'
-    OpalEventProfileNamespacePatch:
+    OpalBusProfileNamespacePatch:
       type: object
       additionalProperties: false
-      description: Patch form of the opal-event compartment. No fields are declared; any member is
+      description: Patch form of the opal-bus compartment. No fields are declared; any member is
         rejected until a declared field exists.
     OpalYoloProfileNamespace:
       type: object
@@ -1726,9 +1679,9 @@ components:
                       checked_at: '2026-01-15T09:31:12Z'
                       uptime_seconds: 41.0
                   event_counters:
-                    summary: OPAL Event counter diagnostics under details.stats
+                    summary: OPAL Bus counter diagnostics under details.stats
                     value:
-                      name: opal-event-svc
+                      name: opal-bus-svc
                       version: 1.9.0
                       api_version: v1
                       status: ok
@@ -1781,9 +1734,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '503':
             $ref: '#/components/responses/ServiceUnavailable'
-        x-opal-cli:
-          group: info
-          command: health
     health_live:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -1797,7 +1747,7 @@ components:
         operationId: opal_health_live_get
         description: 'Cheap liveness check for machine callers: the process is up and its minimal runtime
           is reachable. This is the supported machine probe - it replaces the retired `GET /api/v1/info/ping`
-          for supervisors and load balancers. No CLI binding; use `info health` for the human-readable report.'
+          for supervisors and load balancers. No CLI binding; use `service health` for the human-readable report.'
         responses:
           '200':
             description: Health probe.
@@ -1847,7 +1797,7 @@ components:
         summary: Readiness probe
         operationId: opal_health_ready_get
         description: 'Readiness check for machine callers: the service can accept traffic because every
-          required dependency is initialized and reachable. No CLI binding; use `info health` for the
+          required dependency is initialized and reachable. No CLI binding; use `service health` for the
           human-readable report.'
         responses:
           '200':
@@ -1923,10 +1873,6 @@ components:
             $ref: '#/components/responses/Forbidden'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'
-        x-opal-cli:
-          parent: config
-          group: setting
-          command: list
     settings_key:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -1967,17 +1913,6 @@ components:
             $ref: '#/components/responses/NotFound'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'
-        x-opal-cli:
-          parent: config
-          group: setting
-          command: show
-          options:
-          - flag: --name
-            value: NAME
-            required: true
-            binds:
-              kind: path
-              target: key
       put:
         tags:
         - config
@@ -2027,24 +1962,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '428':
             $ref: '#/components/responses/PreconditionRequired'
-        x-opal-cli:
-          parent: config
-          group: setting
-          command: set
-          options:
-          - flag: --name
-            value: NAME
-            required: true
-            binds:
-              kind: path
-              target: key
-          - flag: --value
-            value: VALUE
-            required: true
-            binds:
-              kind: body
-              target: value
-              parse: json_or_string
       delete:
         tags:
         - config
@@ -2083,17 +2000,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '428':
             $ref: '#/components/responses/PreconditionRequired'
-        x-opal-cli:
-          parent: config
-          group: setting
-          command: remove
-          options:
-          - flag: --name
-            value: NAME
-            required: true
-            binds:
-              kind: path
-              target: key
     config_save:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -2145,15 +2051,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '500':
             $ref: '#/components/responses/OperationFailed'
-        x-opal-cli:
-          group: config
-          command: save
-          options:
-          - flag: --out
-            value: FILE
-            binds:
-              kind: local_out
-              target: snapshot
     config_load:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -2221,16 +2118,6 @@ components:
             $ref: '#/components/responses/PreconditionRequired'
           '500':
             $ref: '#/components/responses/OperationFailed'
-        x-opal-cli:
-          group: config
-          command: load
-          options:
-          - flag: --in
-            value: FILE
-            binds:
-              kind: local_in
-              target: snapshot
-              parse: yaml_or_json_file
     config_validate:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -2277,16 +2164,6 @@ components:
             $ref: '#/components/responses/Forbidden'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'
-        x-opal-cli:
-          group: config
-          command: validate
-          options:
-          - flag: --in
-            value: FILE
-            binds:
-              kind: local_in
-              target: snapshot
-              parse: yaml_or_json_file
     profiles_collection:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -2328,9 +2205,6 @@ components:
             $ref: '#/components/responses/Forbidden'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'
-        x-opal-cli:
-          group: profile
-          command: list
       post:
         tags:
         - profiles
@@ -2382,49 +2256,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '428':
             $ref: '#/components/responses/PreconditionRequired'
-        x-opal-cli:
-          group: profile
-          command: add
-          options:
-          - flag: --in
-            value: FILE
-            binds:
-              kind: local_in
-              target: body
-              parse: yaml_or_json_file
-            description: Whole portable profile document; exclusive with --name/--shared/--module.
-          - flag: --name
-            value: NAME
-            binds:
-              kind: body
-              target: name
-          - flag: --description
-            value: TEXT
-            binds:
-              kind: body
-              target: description
-          - flag: --is-active
-            binds:
-              kind: body
-              target: is_active
-          - flag: --no-is-active
-            binds:
-              kind: body
-              target: is_active
-          - flag: --shared
-            value: FILE
-            binds:
-              kind: local_in
-              target: shared
-              parse: yaml_or_json_file
-            description: Shared-values object merged into the submitted document.
-          - flag: --module
-            value: FILE
-            binds:
-              kind: local_in
-              target: modules.<module-key>
-              parse: yaml_or_json_file
-            description: The receiving service's own compartment; <module-key> resolves to the service's declared compartment.
     profile_item:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -2465,9 +2296,6 @@ components:
             $ref: '#/components/responses/NotFound'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'
-        x-opal-cli:
-          group: profile
-          command: show
       patch:
         tags:
         - profiles
@@ -2517,48 +2345,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '428':
             $ref: '#/components/responses/PreconditionRequired'
-        x-opal-cli:
-          group: profile
-          command: update
-          options:
-          - flag: --in
-            value: FILE
-            binds:
-              kind: local_in
-              target: body
-              parse: yaml_or_json_file
-            description: Patch document; exclusive with --name/--shared/--module.
-          - flag: --name
-            value: NAME
-            binds:
-              kind: body
-              target: name
-          - flag: --description
-            value: TEXT
-            binds:
-              kind: body
-              target: description
-          - flag: --is-active
-            binds:
-              kind: body
-              target: is_active
-          - flag: --no-is-active
-            binds:
-              kind: body
-              target: is_active
-          - flag: --shared
-            value: FILE
-            binds:
-              kind: local_in
-              target: shared
-              parse: yaml_or_json_file
-          - flag: --module
-            value: FILE
-            binds:
-              kind: local_in
-              target: modules.<module-key>
-              parse: yaml_or_json_file
-            description: Partial own-compartment document; supplied fields merge field-wise, unmentioned compartments are preserved. <module-key> resolves to the service's declared compartment.
       delete:
         tags:
         - profiles
@@ -2595,9 +2381,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '428':
             $ref: '#/components/responses/PreconditionRequired'
-        x-opal-cli:
-          group: profile
-          command: remove
     profile_activate:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -2645,9 +2428,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '428':
             $ref: '#/components/responses/PreconditionRequired'
-        x-opal-cli:
-          group: profile
-          command: activate
     engines_collection:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -2821,20 +2601,6 @@ components:
             $ref: '#/components/responses/Forbidden'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'
-        x-opal-cli:
-          group: persona
-          command: list
-          options:
-          - flag: --enabled
-            description: Include only enabled personas.
-            binds:
-              kind: query
-              target: enabled
-          - flag: --no-enabled
-            description: Send enabled=false; include only disabled personas.
-            binds:
-              kind: query
-              target: enabled
       post:
         tags:
         - persona
@@ -2889,46 +2655,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '428':
             $ref: '#/components/responses/PreconditionRequired'
-        x-opal-cli:
-          group: persona
-          command: add
-          options:
-          - flag: --if-match
-            value: ETAG
-            description: Strong If-Match precondition on the current catalog revision (required).
-            binds:
-              kind: header
-              target: If-Match
-          - flag: --persona-id
-            value: ID
-            required: true
-            binds:
-              kind: body
-              target: persona_id
-          - flag: --name
-            value: TEXT
-            required: true
-            binds:
-              kind: body
-              target: name
-          - flag: --description
-            value: TEXT
-            binds:
-              kind: body
-              target: description
-          - flag: --voice-id
-            value: ID
-            binds:
-              kind: body
-              target: voice_id
-          - flag: --enabled
-            binds:
-              kind: body
-              target: enabled
-          - flag: --no-enabled
-            binds:
-              kind: body
-              target: enabled
     persona_item:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -2970,9 +2696,6 @@ components:
             $ref: '#/components/responses/NotFound'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'
-        x-opal-cli:
-          group: persona
-          command: show
       patch:
         tags:
         - persona
@@ -3022,39 +2745,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '428':
             $ref: '#/components/responses/PreconditionRequired'
-        x-opal-cli:
-          group: persona
-          command: update
-          options:
-          - flag: --if-match
-            value: ETAG
-            description: Strong If-Match precondition on the record revision (required).
-            binds:
-              kind: header
-              target: If-Match
-          - flag: --name
-            value: TEXT
-            binds:
-              kind: body
-              target: name
-          - flag: --description
-            value: TEXT
-            binds:
-              kind: body
-              target: description
-          - flag: --voice-id
-            value: ID
-            binds:
-              kind: body
-              target: voice_id
-          - flag: --enabled
-            binds:
-              kind: body
-              target: enabled
-          - flag: --no-enabled
-            binds:
-              kind: body
-              target: enabled
       delete:
         tags:
         - persona
@@ -3084,22 +2774,14 @@ components:
             $ref: '#/components/responses/Forbidden'
           '404':
             $ref: '#/components/responses/NotFound'
+          '409':
+            $ref: '#/components/responses/Conflict'
           '412':
             $ref: '#/components/responses/PreconditionFailed'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'
           '428':
             $ref: '#/components/responses/PreconditionRequired'
-        x-opal-cli:
-          group: persona
-          command: remove
-          options:
-          - flag: --if-match
-            value: ETAG
-            description: Strong If-Match precondition on the record revision (required).
-            binds:
-              kind: header
-              target: If-Match
     persona_validate:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -3142,9 +2824,6 @@ components:
             $ref: '#/components/responses/NotFound'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'
-        x-opal-cli:
-          group: persona
-          command: validate
     service_start:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -3191,15 +2870,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '500':
             $ref: '#/components/responses/OperationFailed'
-        x-opal-cli:
-          group: service
-          command: start
-          options:
-          - flag: --append
-            description: Append to the existing service log instead of truncating it.
-            binds:
-              kind: body
-              target: append
     service_stop:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -3237,9 +2907,6 @@ components:
             $ref: '#/components/responses/UnprocessableEntity'
           '500':
             $ref: '#/components/responses/OperationFailed'
-        x-opal-cli:
-          group: service
-          command: stop
     service_log:
       parameters:
       - $ref: '#/components/parameters/OpalSessionIdParameter'
@@ -3279,13 +2946,3 @@ components:
             $ref: '#/components/responses/NotFound'
           '422':
             $ref: '#/components/responses/UnprocessableEntity'
-        x-opal-cli:
-          group: service
-          command: log
-          options:
-          - flag: --lines
-            value: N
-            description: Number of trailing log lines to return (1-1000, default 10).
-            binds:
-              kind: query
-              target: lines
