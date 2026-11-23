@@ -1,4 +1,4 @@
-"""Persona endpoints (``/api/v1/persona`` family, v0.1.0 kernel pathItems).
+"""Persona endpoints (``/api/v1/persona`` family, v0.5.0 kernel pathItems).
 
 A persona is a named assistant identity for conversation sessions and tasks; an optional
 ``voice_id`` binds an OPAL Say voice identifier (resolved by Say, not verified locally).

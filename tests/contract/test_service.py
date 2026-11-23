@@ -1,4 +1,4 @@
-"""Contract tests: /api/v1/service lifecycle routes (v1.7.1 kernel ``service`` tag).
+"""Contract tests: /api/v1/service lifecycle routes (v0.5.0 kernel ``service`` tag).
 
 The routes delegate to ``ServiceProcessManager``; tests inject a tmp-log-dir manager
 and stub process control so no real server processes are spawned or killed.

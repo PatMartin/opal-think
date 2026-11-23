@@ -1,4 +1,4 @@
-"""Profile endpoints (``/api/v1/profile`` family, v0.1.0 kernel v3 namespaced profiles).
+"""Profile endpoints (``/api/v1/profile`` family, v0.5.0 kernel v3 namespaced profiles).
 
 A profile is a portable namespaced document: opaque string ``id``, required ``shared``
 and ``modules`` maps (empty objects valid). This service is the suite's authoritative

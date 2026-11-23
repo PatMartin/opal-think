@@ -252,7 +252,7 @@ class SettingsStore:
                 conn.execute("ALTER TABLE personas ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
 
     def _migrate_profiles_v2(self, conn: sqlite3.Connection) -> None:
-        """v1.7.1 -> v0.1.0 storage upgrade: ``profiles.id`` INTEGER -> TEXT (v3
+        """v1.7.1 -> v3 (v0.1.0+) storage upgrade: ``profiles.id`` INTEGER -> TEXT (v3
         namespaced documents use opaque string ids) and each record JSON drops the
         retired flat ``settings`` preset compartment. No-op on a v3 table."""
         col = next((r for r in conn.execute("PRAGMA table_info(profiles)").fetchall() if r[1] == "id"), None)
@@ -376,7 +376,7 @@ class SettingsStore:
         """Remove an override (restore default); returns the new global revision."""
         return self.reset_checked(key)
 
-    # -- personas (v1.7.1; share the global config revision) ---------------------------------------------
+    # -- personas (v0.5.0; share the global config revision) ---------------------------------------------
 
     @staticmethod
     def _persona_row(row: sqlite3.Row | tuple | None) -> dict[str, Any] | None:
@@ -465,7 +465,7 @@ class SettingsStore:
 
         return self._checked_write(write, expect_global=expect_global)
 
-    # -- profiles (v0.1.0 kernel v3 namespaced profiles; share the global revision) ---------------------
+    # -- profiles (v0.5.0 kernel v3 namespaced profiles; share the global revision) ---------------------
     #
     # A profile is a portable namespaced document: opaque string ``id``, required
     # ``shared`` and ``modules`` maps (empty objects valid). Indexed fields are
@@ -664,7 +664,7 @@ class SettingsStore:
 
         return self._checked_write(write, expect_global=expect_global)
 
-    # -- wholesale portable-config replace (config load, v0.1.0) --------------------------------
+    # -- wholesale portable-config replace (config load, v0.5.0) --------------------------------
 
     def replace_portable_config_checked(
         self,

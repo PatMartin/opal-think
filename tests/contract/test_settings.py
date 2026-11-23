@@ -148,7 +148,7 @@ def test_duplicate_key_etag_second_write_fails(client: TestClient) -> None:
 
 
 def test_collection_patch_retired(client: TestClient) -> None:
-    """v0.1.0: PATCH /api/v1/setting/ is retired; collection writes go through config load."""
+    """v0.5.0: PATCH /api/v1/setting/ is retired; collection writes go through config load."""
     assert client.patch("/api/v1/setting/", json={"task.max_concurrent": 6}).status_code in (404, 405)
 
 

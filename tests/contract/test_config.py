@@ -1,4 +1,4 @@
-"""Contract tests: /api/v1/config save/load/validate (kernel config_* path items, v0.1.0).
+"""Contract tests: /api/v1/config save/load/validate (kernel config_* path items, v0.5.0).
 
 Snapshots are the kernel ``OpalConfigSnapshot`` envelope — ``format_version``,
 ``module``, ``created_at``, flat ``settings`` overrides and ``resources`` sections —
@@ -195,7 +195,7 @@ def test_load_explicit_null_snapshot(client: TestClient) -> None:
 
 
 def test_retired_backup_routes_gone(client: TestClient) -> None:
-    """v0.1.0: the backup route family is retired in favor of config save/load/validate."""
+    """v0.5.0: the backup route family is retired in favor of config save/load/validate."""
     for method, path in (
         ("get", "/api/v1/backup/list"),
         ("post", "/api/v1/backup/export"),

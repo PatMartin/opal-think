@@ -39,7 +39,7 @@ def run(
         typer.echo(str(exc), err=True)
         raise typer.Exit(2) from exc
 
-    # Managed-server protocol (v1.7.1 kernel `service` tag): when launched by
+    # Managed-server protocol (v0.5.0 kernel `service` tag): when launched by
     # POST /api/v1/service/start with a restart pending, hold off binding until the
     # parent pids have exited so the port frees cleanly.
     wait_pids = os.environ.get("OPAL_THINK_WAIT_FOR_PID")

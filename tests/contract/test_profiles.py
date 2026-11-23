@@ -1,4 +1,4 @@
-"""Contract tests: /api/v1/profile CRUD + activate, v0.1.0 kernel v3 namespaced profiles.
+"""Contract tests: /api/v1/profile CRUD + activate, v0.5.0 kernel v3 namespaced profiles.
 
 Profiles are portable namespaced documents (opaque string ``id``, required ``shared``
 and ``modules`` maps). The opal-think compartment is a closed empty schema, so

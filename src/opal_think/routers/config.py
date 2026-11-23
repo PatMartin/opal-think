@@ -1,4 +1,4 @@
-"""``/api/v1/config``: kernel ``config save|load|validate`` (v0.1.0). Portable
+"""``/api/v1/config``: kernel ``config save|load|validate`` (v0.5.0). Portable
 ``OpalConfigSnapshot`` envelopes carry flat setting-key overrides plus the declared
 resource sections (profiles/personas/models/engines); history, sessions, runtime state
 and secrets are never included. Loads are atomic full replacements under a mandatory

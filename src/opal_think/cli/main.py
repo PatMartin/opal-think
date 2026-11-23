@@ -39,8 +39,9 @@ tasks_app = typer.Typer(
     no_args_is_help=True)
 info_app = typer.Typer(help="Service health probe.", no_args_is_help=True)
 service_app = typer.Typer(help="Managed opal-think-svc process lifecycle.", no_args_is_help=True)
-# Canonical x-opal-cli bindings (v0.1.0): `config` hosts save/load/validate and the
-# `setting` group; `persona` and `profile` are top-level groups.
+# Canonical CLI layout derived from OpenAPI resource paths and operationIds
+# (kernel v0.5.0 removed the x-opal-cli extensions): `config` hosts save/load/
+# validate and the `setting` group; `persona` and `profile` are top-level groups.
 config_app = typer.Typer(help="Portable configuration resources.", no_args_is_help=True)
 config_setting_app = typer.Typer(help="Portable service settings (strong-ETag guarded).", no_args_is_help=True)
 personas_app = typer.Typer(help="Named assistant personas (shared OPAL identities).", no_args_is_help=True)
@@ -237,7 +238,7 @@ def _profile_document(
     shared: str | None,
     module: str | None,
 ) -> dict[str, Any]:
-    """Build the profile document/patch per the kernel ``x-opal-cli`` bindings: ``--in``
+    """Build the profile document/patch per the suite CLI conventions: ``--in``
     supplies the whole file (exclusive with the field options); ``--shared``/
     ``--module`` files feed the ``shared`` section and the own ``opal-think``
     compartment."""

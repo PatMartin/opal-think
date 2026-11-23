@@ -265,7 +265,7 @@ class ServiceLogTail(BaseModel):
     lines: list[str] = Field(default_factory=list)
 
 
-# -- configuration snapshots (kernel ``config_*`` path items, v0.1.0) ------------------------------------
+# -- configuration snapshots (kernel ``config_*`` path items, v0.5.0) ------------------------------------
 
 SNAPSHOT_FORMAT_VERSION = "1.0.0"
 SNAPSHOT_MODULE = "opal-think"
@@ -342,7 +342,7 @@ class ConfigValidation(BaseModel):
     warnings: list[OpalValidationIssue] = Field(default_factory=list)
 
 
-# -- personas (v1.7.1; shared OPAL persona identifiers introduced by OPAL Say) ----------------------------
+# -- personas (v0.5.0; shared OPAL persona identifiers introduced by OPAL Say) ----------------------------
 
 _T = TypeVar("_T")
 
@@ -399,7 +399,7 @@ class PersonaRead(BaseModel):
     updated_at: datetime
 
 
-# -- profiles (v0.1.0 kernel ``OpalProfile`` family: namespaced ``shared`` + ``modules``) --------------
+# -- profiles (v0.5.0 kernel ``OpalProfile`` family: namespaced ``shared`` + ``modules``) --------------
 #
 # A profile is a portable namespaced document: opaque string ``id``, required
 # ``shared`` and ``modules`` sections (empty objects valid). The opal-think
